@@ -6,7 +6,7 @@
 
   ![Versión actual](https://img.shields.io/badge/Versión-v0.1_Alfa-orange.svg)
   ![Plataforma](https://img.shields.io/badge/Plataforma-PC_Windows-blue.svg)
-  ![Motor](https://img.shields.io/badge/Motor-Unity_6-black.svg?logo=unity)
+  ![Motor](https://img.shields.io/badge/Motor-Unity_6000.4.0b2-black.svg?logo=unity)
 </div>
 
 ---
@@ -27,11 +27,12 @@ El juego alterna entre ciclos de **Día** (seguros, pero donde se ejecuta a los 
 
 Este proyecto utiliza una **Arquitectura de Red Estrictamente Autorizada por el Servidor** para prevenir trampas. Ningún cliente confía en la lógica local, lo que previene que los jugadores usen *hacks* para saber quién es el Lobo o modificar sus votos.
 
-*   **Motor Gráfico:** Unity 6 (URP - Universal Render Pipeline).
-*   **Networking (Multijugador):** Unity Netcode for GameObjects (NGO).
-*   **Gestión de Servidores Cloud:** Unity Relay (Para partidas online gratuitas sin abrir puertos `P2P`).
-*   **Cámaras:** Cinemachine Virtual Cameras (Tercera Persona).
-*   **Animación Sinfónica:** Sincronización de Locomoción avanzada Cliente-Servidor.
+*   **Motor Gráfico:** Unity 6000.4.0b2 (URP - Universal Render Pipeline **v17.4.0**).
+*   **Networking (Multijugador):** Unity Netcode for GameObjects (NGO) **v2.9.2**.
+*   **Gestión de Servidores Cloud:** Unity Relay y Multiplayer Services **v1.2.1** (Sin abrir puertos `P2P`).
+*   **Cámaras:** Cinemachine Virtual Cameras **v2.10.5**.
+*   **Inputs:** Unity Input System **v1.17.0**.
+*   **Emulación Multiplayer Editor:** ParrelSync Clone Tool.
 
 ---
 
@@ -56,7 +57,7 @@ Hemos cimentado las bases más complejas del código multijugador que hacen posi
 
 Si deseas descargar el proyecto y trastear con el código maestro:
 
-1. Asegúrate de tener instalado **Unity 2022.3 LTS o Unity 6** vía Unity Hub.
+1. Asegúrate de tener instalado **Unity 6000.4.0b2** vía Unity Hub.
 2. Abre tu terminal de comandos (o GitHub Desktop) y clona el código fuente:
    ```bash
    git clone https://github.com/hpx380x/LoboGame.git
