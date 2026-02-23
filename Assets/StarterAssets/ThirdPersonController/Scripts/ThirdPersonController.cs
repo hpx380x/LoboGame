@@ -132,6 +132,14 @@ namespace StarterAssets
             }
         }
 
+        private void CheckCamera()
+        {
+            if (_mainCamera == null)
+            {
+                _mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
+            }
+        }
+
         private void Start()
         {
             _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
@@ -155,6 +163,8 @@ namespace StarterAssets
         private void Update()
         {
             _hasAnimator = TryGetComponent(out _animator);
+
+            CheckCamera();
 
             JumpAndGravity();
             GroundedCheck();

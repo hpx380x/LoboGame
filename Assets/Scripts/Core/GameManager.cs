@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -25,6 +26,23 @@ public class GameManager : NetworkBehaviour
         NetworkVariableReadPermission.Everyone, 
         NetworkVariableWritePermission.Server
     );
+
+    [Header("Lista de Jugadores en Sala")]
+    public NetworkVariable<FixedString4096Bytes> listaJugadoresNetwork = new NetworkVariable<FixedString4096Bytes>(
+        "",
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+    public event System.Action<string> OnListaJugadoresModificada;
+
+    [Header("Código de Sala (Relay)")]
+    public NetworkVariable<FixedString32Bytes> codigoSalaNetwork = new NetworkVariable<FixedString32Bytes>(
+        "",
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+    // [Regla 5] Evento local para mostrar el código de la sala en toda la UI de todos los clientes
+    public event System.Action<string> OnCodigoSalaModificado;
 
     [Header("Reloj del Servidor")]
     private float tiempoRestanteFase = 0f;
@@ -59,8 +77,21 @@ public class GameManager : NetworkBehaviour
         // Nos suscribimos para escuchar cada vez que la fase cambie en la red
         currentPhase.OnValueChanged += AlCambiarDeFase;
         
+        // Cargar lista de jugadores en la UI
+        listaJugadoresNetwork.OnValueChanged += AlCambiarListaJugadores;
+        codigoSalaNetwork.OnValueChanged += AlCambiarCodigoSala;
+        
         // Disparo inicial por si el cliente cargó la escena unos segundos tarde
         AlCambiarDeFase(currentPhase.Value, currentPhase.Value);
+        AlCambiarListaJugadores(new FixedString4096Bytes(""), listaJugadoresNetwork.Value);
+        AlCambiarCodigoSala(new FixedString32Bytes(""), codigoSalaNetwork.Value);
+
+        if (IsServer)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback += ActualizarListaJugadoresServidor;
+            NetworkManager.Singleton.OnClientDisconnectCallback += ActualizarListaJugadoresServidor;
+            ActualizarListaJugadoresServidor(NetworkManager.Singleton.LocalClientId); // Primer disparo para el test
+        }
 
         // [Nuevo] Nos preparamos para el peor caso: que el Host apague su PC a mitad de partida
         if (IsClient)
@@ -72,10 +103,18 @@ public class GameManager : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         currentPhase.OnValueChanged -= AlCambiarDeFase;
+        listaJugadoresNetwork.OnValueChanged -= AlCambiarListaJugadores;
+        codigoSalaNetwork.OnValueChanged -= AlCambiarCodigoSala;
 
         if (NetworkManager.Singleton != null)
         {
             NetworkManager.Singleton.OnClientDisconnectCallback -= EnDesconexionInesperada;
+            
+            if (IsServer)
+            {
+                NetworkManager.Singleton.OnClientConnectedCallback -= ActualizarListaJugadoresServidor;
+                NetworkManager.Singleton.OnClientDisconnectCallback -= ActualizarListaJugadoresServidor;
+            }
         }
 
         base.OnNetworkDespawn();
@@ -109,6 +148,50 @@ public class GameManager : NetworkBehaviour
             // 4. Auto-destrucción de esta "Nave" GameManager
             Destroy(gameObject);
         }
+    }
+
+    private void AlCambiarListaJugadores(FixedString4096Bytes valorViejo, FixedString4096Bytes valorNuevo)
+    {
+        // Notificamos a nuestra UI localmente usando el evento de C# (Desacoplamiento)
+        OnListaJugadoresModificada?.Invoke(valorNuevo.ToString());
+    }
+
+    private void AlCambiarCodigoSala(FixedString32Bytes valorViejo, FixedString32Bytes valorNuevo)
+    {
+        OnCodigoSalaModificado?.Invoke(valorNuevo.ToString());
+    }
+
+    public void EstablecerCodigoSalaSincronizado(string nuevoCodigo)
+    {
+        if (IsServer)
+        {
+            codigoSalaNetwork.Value = new FixedString32Bytes(nuevoCodigo);
+        }
+    }
+
+    private void ActualizarListaJugadoresServidor(ulong clientId)
+    {
+        // Regla 3: Guard de Servidor
+        if (!IsServer) return;
+        
+        string nuevaLista = "";
+        int conteo = 0;
+        
+        foreach (var id in NetworkManager.Singleton.ConnectedClientsIds)
+        {
+            conteo++;
+            if (id == NetworkManager.Singleton.LocalClientId)
+            {
+                nuevaLista += $"- Jugador {id} (HOST)\n";
+            }
+            else
+            {
+                nuevaLista += $"- Jugador {id}\n";
+            }
+        }
+        
+        string cabecera = $"<color=yellow>JUGADORES EN LA SALA ({conteo}/10):</color>\n\n";
+        listaJugadoresNetwork.Value = new FixedString4096Bytes(cabecera + nuevaLista);
     }
 
     private void Update()
@@ -169,18 +252,21 @@ public class GameManager : NetworkBehaviour
                 PlayerState ps = netObj.GetComponent<PlayerState>();
                 if (ps != null && !ps.isDead.Value)
                 {
-                    // Desactivar el CharacterController para dejarlo teletransportar libremente
-                    CharacterController cc = netObj.GetComponent<CharacterController>();
-                    if (cc != null) cc.enabled = false;
-
-                    Transform spawnDestino = spawnManager != null ? spawnManager.GetNextSpawnPoint() : null;
+                    // Usamos la nueva función circular de puntos de reunión
+                    Transform spawnDestino = spawnManager != null ? spawnManager.GetNextVotingSpawnPoint() : null;
                     if (spawnDestino != null)
                     {
-                        netObj.transform.position = spawnDestino.position;
-                        netObj.transform.rotation = spawnDestino.rotation;
+                        // [CRÍTICO] Ya no empujamos el transform desde el servidor, porque su computadora local 
+                        // nos negaría el movimiento la mayoría de veces debido a los pre-cálculos del motor físico.
+                        // En su lugar, le emitimos una ORDEN MILITAR para que su propia computadora haga el viaje voluntariamente:
+                        
+                        ClientRpcParams enviarSoloAlDueño = new ClientRpcParams
+                        {
+                            Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientInfo.Value.ClientId } }
+                        };
+                        
+                        ps.ForzarTeletransporteClientRpc(spawnDestino.position, spawnDestino.rotation, enviarSoloAlDueño);
                     }
-
-                    if (cc != null) cc.enabled = true;
                 }
             }
         }
@@ -417,7 +503,7 @@ public class GameManager : NetworkBehaviour
             if (playerPrefab != null)
             {
                 Transform spawnPoint = spawnManager != null ? spawnManager.GetNextSpawnPoint() : null;
-                Vector3 spawnPos = spawnPoint != null ? spawnPoint.position : new Vector3(0, 10, 0); // Lo ponemos alto para que caiga si falta
+                Vector3 spawnPos = spawnPoint != null ? spawnPoint.position + Vector3.up * 1.0f : new Vector3(0, 10, 0); // Lo ponemos alto para que caiga sin traspasar
                 Quaternion spawnRot = spawnPoint != null ? spawnPoint.rotation : Quaternion.identity;
 
                 GameObject playerInstance = Instantiate(playerPrefab, spawnPos, spawnRot);
@@ -430,9 +516,20 @@ public class GameManager : NetworkBehaviour
 
                     // [V0.3: ADN Autorizado] Le asignamos al PlayerState si este sujeto es Lobo.
                     PlayerState estadoP = playerInstance.GetComponent<PlayerState>();
-                    if (estadoP != null && clientId == wolfId)
+                    if (estadoP != null)
                     {
-                        estadoP.isWolf.Value = true;
+                        if (clientId == wolfId)
+                        {
+                            estadoP.isWolf.Value = true;
+                        }
+
+                        // Le ordenamos Moverse Forzosamente a Su silla inicial, 
+                        // para que el dueño y todos los demás acaten el punto exacto ignorando cualquier fallo de cámara.
+                        ClientRpcParams enviarSoloAlDueño = new ClientRpcParams
+                        {
+                            Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientId } }
+                        };
+                        estadoP.ForzarTeletransporteClientRpc(spawnPos, spawnRot, enviarSoloAlDueño);
                     }
                 }
             }

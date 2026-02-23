@@ -11,17 +11,41 @@ using TMPro;
 
 public class LobbyUI : MonoBehaviour
 {
-    [Header("UI Elements")]
+    [Header("Paneles (Screens)")]
+    [Tooltip("Panel principal con los botones de Host, Client y Quit")]
+    [SerializeField] private GameObject mainMenuPanel;
+    [Tooltip("Panel de la sala de espera (Lobby) con la lista de jugadores")]
+    [SerializeField] private GameObject roomPanel;
+    [Tooltip("Panel con las opciones gráficas y configuración")]
+    [SerializeField] private GameObject settingsPanel;
+
+    [Header("Main Menu Elements")]
     [SerializeField] private Button hostButton;
     [SerializeField] private Button clientButton;
-
-    [Header("Relay System (Nube)")]
+    [Tooltip("Botón para cerrar el juego")]
+    [SerializeField] private Button quitButton;
+    [Tooltip("Botón para abrir el panel de Ajustes")]
+    [SerializeField] private Button settingsButton;
     [Tooltip("El recuadro blanco donde los amigos escriben el código para unirse")]
     [SerializeField] private TMP_InputField joinCodeInput;
+
+    [Header("Room Elements")]
     [Tooltip("El texto donde aparecerá el código en mayúsculas para que el Host se lo dicte a sus amigos")]
     [SerializeField] private TextMeshProUGUI joinCodeText;
+    [Tooltip("Texto grande de UI donde pintaremos quién entró a la sala")]
+    [SerializeField] private TextMeshProUGUI playerListText;
+    [Tooltip("Botón que solo verá el Host para viajar a la escena de Gameplay")]
+    [SerializeField] private Button startGameButton;
+    [Tooltip("Botón para desconectarse y volver al menú principal")]
+    [SerializeField] private Button leaveButton;
 
-    [Header("Network Management")]
+    [Header("Settings Elements")]
+    [Tooltip("Botón para cerrar el menú de ajustes y volver al menú principal")]
+    [SerializeField] private Button settingsBackButton;
+
+    [Header("Sistemas Inyectados")]
+    [Tooltip("Gestor de partida inyectado para escuchar eventos sin usar Singletons")]
+    [SerializeField] private GameManager gameManager;
     // [Regla 4] Evitamos NetworkManager.Singleton
     [SerializeField] private NetworkManager networkManager;
 
@@ -35,6 +59,28 @@ public class LobbyUI : MonoBehaviour
 
         if (hostButton != null) hostButton.onClick.AddListener(OnHostButtonClicked);
         if (clientButton != null) clientButton.onClick.AddListener(OnClientButtonClicked);
+        if (quitButton != null) quitButton.onClick.AddListener(QuitGame);
+        if (leaveButton != null) leaveButton.onClick.AddListener(LeaveRoom);
+        
+        if (settingsButton != null) settingsButton.onClick.AddListener(MostrarSettingsPanel);
+        if (settingsBackButton != null) settingsBackButton.onClick.AddListener(MostrarMainMenu);
+        
+        // 1. Ocultar el botón al inicio, solo se muestra cuando eres Host confirmado
+        if (startGameButton != null) 
+        {
+            startGameButton.gameObject.SetActive(false);
+            startGameButton.onClick.AddListener(OnStartGameButtonClicked);
+        }
+
+        // Estado inicial de la UI
+        MostrarMainMenu();
+
+        // Suscripción de UI a eventos de datos puros (Regla 5: Desacoplamiento)
+        if (gameManager != null)
+        {
+            gameManager.OnListaJugadoresModificada += ActualizarTextoJugadores;
+            gameManager.OnCodigoSalaModificado += ActualizarTextoCodigo;
+        }
 
         // Nos suscribimos de manera permanente al evento de desconexión
         if (networkManager != null)
@@ -71,12 +117,7 @@ public class LobbyUI : MonoBehaviour
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
             Debug.Log($"<color=yellow>¡CÓDIGO DE SALA CREADO OBJETIVO: {joinCode}</color>");
 
-            // 3. Pintamos el texto para que la gente en la sala lo vea
-            if (joinCodeText != null) joinCodeText.text = $"CÓDIGO SECRETO: {joinCode}";
-
-            // 4. Inyectamos los datos de Relay en el motor de Netcode (Con el formato de 1 solo parámetro nuevo)
-            // 4. Inyectamos los datos sin usar RelayServerData para evadir el bug de constructores
-            // 4. Inyectamos los datos asegurando endpoints
+            // 3. Extraemos IPs nativas
             string hostIP = "";
             ushort hostPort = 0;
             bool isSecure = false;
@@ -104,17 +145,18 @@ public class LobbyUI : MonoBehaviour
                 hostIP, hostPort, allocation.AllocationIdBytes, allocation.Key, allocation.ConnectionData, isSecure
             );
 
-            // 5. Arrancamos el Host real en el internet e inyectamos el botón verde
+            // 4. Arrancamos Primero el Servidor real en el internet
             bool started = networkManager.StartHost();
             if(!started) Debug.LogError("NetworkManager ignoró el START HOST");
-            
-            // Ocultamos botones de Host/Client para no recargar (Pero no el GameObject para conservar el ID a la vista)
-            hostButton.gameObject.SetActive(false);
-            if (clientButton != null) clientButton.gameObject.SetActive(false);
-            if (joinCodeInput != null) joinCodeInput.gameObject.SetActive(false);
 
-            GameUI gameUI = FindFirstObjectByType<GameUI>(FindObjectsInactive.Include);
-            if (gameUI != null) gameUI.gameObject.SetActive(true);
+            // 4. ¡AHORA SÍ! Compartimos el código a través del GameManager (Porque el servidor ya nació oficialmente)
+            if (gameManager != null)
+            {
+                gameManager.EstablecerCodigoSalaSincronizado(joinCode);
+            }
+            
+            // Pasamos a la pantalla de Sala
+            MostrarRoomPanel(true);
         }
         catch (RelayServiceException e)
         {
@@ -183,7 +225,7 @@ public class LobbyUI : MonoBehaviour
             if (success)
             {
                 Debug.Log($"<color=green>[LobbyUI] ¡Conexión aceptada por el transportador!</color>");
-                gameObject.SetActive(false);
+                MostrarRoomPanel(false); // Falso porque somos Clientes
             }
             else
             {
@@ -196,9 +238,42 @@ public class LobbyUI : MonoBehaviour
         }
     }
 
+    private void OnStartGameButtonClicked()
+    {
+        if (gameManager != null)
+        {
+            gameManager.StartGame();
+        }
+    }
+
+    private void LeaveRoom()
+    {
+        if (networkManager != null)
+        {
+            networkManager.Shutdown(); // Corta la conexión actual limpiamente
+        }
+        VolverAlLobby();
+    }
+
+    private void QuitGame()
+    {
+        Debug.Log("Saliendo del juego...");
+        Application.Quit();
+        
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#endif
+    }
+
     private void OnDestroy()
     {
-        // Limpiamos el evento si este GameObject se destruye
+        // Limpiamos los eventos si este GameObject se destruye
+        if (gameManager != null)
+        {
+            gameManager.OnListaJugadoresModificada -= ActualizarTextoJugadores;
+            gameManager.OnCodigoSalaModificado -= ActualizarTextoCodigo;
+        }
+
         if (networkManager != null)
         {
             networkManager.OnClientDisconnectCallback -= OnClientDisconnect;
@@ -216,20 +291,57 @@ public class LobbyUI : MonoBehaviour
         }
     }
 
+    private void ActualizarTextoJugadores(string nuevaLista)
+    {
+        if (playerListText != null)
+        {
+            playerListText.text = nuevaLista;
+        }
+    }
+
+    private void ActualizarTextoCodigo(string nuevoCodigo)
+    {
+        if (joinCodeText != null)
+        {
+            joinCodeText.text = string.IsNullOrEmpty(nuevoCodigo) ? "" : $"CÓDIGO SECRETO: {nuevoCodigo}";
+        }
+    }
+
+    private void MostrarMainMenu()
+    {
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
+        if (roomPanel != null) roomPanel.SetActive(false);
+        if (settingsPanel != null) settingsPanel.SetActive(false);
+        
+        if (joinCodeText != null) joinCodeText.text = "";
+        if (startGameButton != null) startGameButton.gameObject.SetActive(false);
+        
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private void MostrarRoomPanel(bool isHost)
+    {
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (roomPanel != null) roomPanel.SetActive(true);
+        if (settingsPanel != null) settingsPanel.SetActive(false);
+        
+        if (startGameButton != null) startGameButton.gameObject.SetActive(isHost);
+    }
+
+    private void MostrarSettingsPanel()
+    {
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (roomPanel != null) roomPanel.SetActive(false);
+        if (settingsPanel != null) settingsPanel.SetActive(true);
+    }
+
     private void VolverAlLobby()
     {
-        // 1. Mostrar de nuevo TODO el Canvas del Lobby
-        gameObject.SetActive(true);
-        
-        // 2. Reactivar los botones y el campo de texto interno (que ocultamos al entrar)
-        if (hostButton != null) hostButton.gameObject.SetActive(true);
-        if (clientButton != null) clientButton.gameObject.SetActive(true);
-        if (joinCodeInput != null) joinCodeInput.gameObject.SetActive(true);
+        gameObject.SetActive(true); // Nos aseguramos de revivir si la base estaba desactivada
+        MostrarMainMenu();
 
-        // Limpiamos el texto que decía el código antiguo
-        if (joinCodeText != null) joinCodeText.text = "";
-
-        // 3. Ocultar la Interfaz del Juego si estaba abierta
+        // Ocultar la Interfaz del Juego si estaba abierta erróneamente
         GameUI gameUI = FindFirstObjectByType<GameUI>(FindObjectsInactive.Include);
         if (gameUI != null) gameUI.gameObject.SetActive(false);
 

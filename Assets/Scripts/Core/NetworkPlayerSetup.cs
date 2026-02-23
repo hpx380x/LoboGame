@@ -21,20 +21,23 @@ public class NetworkPlayerSetup : NetworkBehaviour
 
         // --- SOLO EL DUEÑO (LOCAL) LLEGA A ESTE PUNTO ---
 
-        // Busca la cámara que está en la escena principal por su etiqueta "MainCamera" o nombre.
-        var virtualCamera = GameObject.Find("PlayerFollowCamera"); 
+        // -- Buscador Universal de Cámaras Cinemachine --
+        var virtualCamera = FindFirstObjectByType<CinemachineVirtualCamera>(); 
         
         if (virtualCamera != null)
         {
-            var cinemachineBrain = virtualCamera.GetComponent<CinemachineVirtualCamera>();
-            if (cinemachineBrain != null)
+            if (cameraTarget != null)
             {
-                cinemachineBrain.Follow = cameraTarget.transform;
+                virtualCamera.Follow = cameraTarget.transform;
+            }
+            else 
+            {
+                virtualCamera.Follow = this.transform; // Fallback, seguir al cuerpo
             }
         }
         else
         {
-            Debug.LogError("No se encontró el objeto 'PlayerFollowCamera' en la escena.");
+            Debug.LogWarning("[Sistema de Red] No se detectó ninguna 'CinemachineVirtualCamera' activa en el mapa. ¿Estás en un menú vacío o olvidaste añadir una cámara en la escena?");
         }
     }
 }

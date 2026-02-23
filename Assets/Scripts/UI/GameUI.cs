@@ -12,9 +12,6 @@ public class GameUI : MonoBehaviour
         {
             startButton.onClick.AddListener(OnStartGameClicked);
         }
-
-        // Lo ocultamos por defecto para que el mero mortal (Cliente) no pueda pulsarlo por error
-        gameObject.SetActive(false);
     }
 
     void Update()
@@ -30,9 +27,10 @@ public class GameUI : MonoBehaviour
         GameManager gm = FindFirstObjectByType<GameManager>();
         if (gm != null)
         {
+            // OJO: Ya no ocultamos el script con gameObject.SetActive(false) porque
+            // lo rompería irreversiblemente para futuras partidas si la gente se sale
+            // y vuelve a crear otra sala distinta.
             gm.StartGame();
-            // Desactivamos el botón una vez iniciada la partida para no spamear roles
-            gameObject.SetActive(false);
         }
         else
         {
