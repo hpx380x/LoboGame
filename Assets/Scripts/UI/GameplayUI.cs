@@ -23,6 +23,12 @@ public class GameplayUI : MonoBehaviour
     [Tooltip("El fondo o ranura del inventario para cambiarle el color activo/inactivo")]
     [SerializeField] private UnityEngine.UI.Image fondoInventario;
 
+    [Header("Barra de Progreso (Minijuegos)")]
+    [Tooltip("El objeto entero de la barra de progreso (Para ocultarla cuando no se use)")]
+    [SerializeField] private GameObject contenedorBarra;
+    [Tooltip("El componente Slider que hace de barra llenándose")]
+    [SerializeField] private UnityEngine.UI.Slider barraProgreso;
+
     public void MostrarRol(string rol)
     {
         if (textoRol != null)
@@ -92,6 +98,28 @@ public class GameplayUI : MonoBehaviour
                 // Si tienes un objeto, la ranura se ilumina de amarillo levemente (o naranja)
                 if (fondoInventario != null) fondoInventario.color = new Color(1f, 0.8f, 0f, 0.6f); 
             }
+        }
+    }
+
+    // --- SISTEMA DE BARRA DE PROGRESO IN-GAME ---
+    public void MostrarBarraProgreso(bool mostrar)
+    {
+        if (contenedorBarra != null)
+        {
+            contenedorBarra.SetActive(mostrar);
+            if (mostrar && barraProgreso != null) 
+            {
+                barraProgreso.value = 0f; // Reinicia la barra a cero visualmente
+            }
+        }
+    }
+
+    public void ActualizarBarraProgreso(float progresoActual, float maximoProgreso)
+    {
+        if (barraProgreso != null && maximoProgreso > 0f)
+        {
+            // Calcula el porcentaje (ej: 2.5 seg / 5 seg = 0.5 que es el 50%)
+            barraProgreso.value = progresoActual / maximoProgreso;
         }
     }
 
