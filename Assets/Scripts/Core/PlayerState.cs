@@ -1,19 +1,12 @@
 using Unity.Netcode;
 using UnityEngine;
 using StarterAssets;
+using Core.Enums;
 
-public enum TipoObjeto 
-{ 
-    Ninguno, 
-    Antorcha, 
-    Pocion, 
-    Daga 
-}
 
 public class PlayerState : NetworkBehaviour
 {
     [Header("Identidad y Estado (Server-Auth)")]
-    // [Regla de Netcode] Solo el servidor puede modificar estas variables, pero todos las pueden leer.
     public NetworkVariable<bool> isWolf = new NetworkVariable<bool>(
         false, 
         NetworkVariableReadPermission.Everyone, 
@@ -26,57 +19,102 @@ public class PlayerState : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
-    [Header("Inventario Autoritativo")]
-    public NetworkVariable<TipoObjeto> objetoEnMano = new NetworkVariable<TipoObjeto>(
-        TipoObjeto.Ninguno, 
+    public NetworkVariable<RolAldea> rolAldea = new NetworkVariable<RolAldea>(
+        RolAldea.Ninguno,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+
+    [Header("Sistema de Tareas")]
+    public NetworkVariable<int> tareasCompletadasHoy = new NetworkVariable<int>(
+        0,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+
+    [Header("Vinculos de Jugador")]
+    public NetworkVariable<ulong> amanteId = new NetworkVariable<ulong>(
+        9999, // 9999 significa que no tiene amante
         NetworkVariableReadPermission.Everyone, 
         NetworkVariableWritePermission.Server
     );
 
-    [Header("Modelos 3D Visuales (Hijos de la Mano)")]
-    [Tooltip("El modelo de la Antorcha (con su luz o partículas)")]
-    [SerializeField] private GameObject modeloAntorcha;
-    [Tooltip("El modelo de la Poción (que cura o da velocidad)")]
-    [SerializeField] private GameObject modeloPocion;
-    [Tooltip("El modelo del cuchillo letal")]
-    [SerializeField] private GameObject modeloDaga;
+    [Header("Sistema de Huellas")]
+    public static System.Collections.Generic.List<GameObject> todasLasHuellas = new System.Collections.Generic.List<GameObject>();
 
-    // Referencias a los componentes de movimiento de tu personaje de StarterAssets
     private CharacterController characterController;
     private ThirdPersonController thirdPersonController;
     private Animator animator;
+    private SpectatorController _spectatorController;
+    private PlayerStatusEffects statusEffects;
+
+    [Header("Herencia de Oficios")]
+    [SerializeField] private RolePrefabMapping[] prefabsOficio;
+
+    [System.Serializable]
+    public struct RolePrefabMapping
+    {
+        public RolAldea rol;
+        public GameObject prefab;
+    }
 
     private void Awake()
     {
         characterController = GetComponent<CharacterController>();
         thirdPersonController = GetComponent<ThirdPersonController>();
         animator = GetComponent<Animator>();
+        _spectatorController = GetComponent<SpectatorController>();
+        statusEffects = GetComponent<PlayerStatusEffects>(); // Puede existir o no, la lógica vital la usamos como consulta
+    }
+
+    // Propiedad pública generalizada
+    public bool isInputLocked => isDead.Value || (statusEffects != null && statusEffects.isStunned.Value);
+
+    private void Update()
+    {
+        // [TESTING] Tecla K para suicidio
+        if (UnityEngine.InputSystem.Keyboard.current != null && UnityEngine.InputSystem.Keyboard.current.kKey.wasPressedThisFrame)
+        {
+            if (IsOwner) SuicideServerRpc();
+        }
+
+        if (!IsOwner) return;
+
+        if (isInputLocked)
+        {
+            if (TryGetComponent(out StarterAssetsInputs inputs))
+            {
+                inputs.isInputLocked = true;
+                inputs.move = Vector2.zero;
+                inputs.look = Vector2.zero;
+            }
+        }
+        else
+        {
+            if (TryGetComponent(out StarterAssetsInputs inputs))
+            {
+                if (inputs.isInputLocked) inputs.isInputLocked = false;
+            }
+        }
     }
 
     public override void OnNetworkSpawn()
     {
-        // Nos suscribimos matemáticamente: Si el servidor decreta mi muerte, mi juego reaccionará localmente.
         isDead.OnValueChanged += OnDeathStateChanged;
         
-        // [Objetivo 3] Suscripción a cambios de inventario
-        objetoEnMano.OnValueChanged += OnObjetoCambiado;
-        
-        // Comprobación de seguridad al nacer (por si un cliente se une tarde y el cuerpo ya era un cadáver)
-        if (isDead.Value)
-        {
-            ApplyDeathPhysics();
-        }
+        if (isDead.Value) ApplyDeathPhysics();
 
-        // Estado inicial del objeto (para el que se une tarde)
-        ActualizarVisualizacionObjeto(objetoEnMano.Value);
-        
-        // Si somos nosotros mismos, le decimos a nuestro recuadro en pantalla que arranque con lo que tenemos puesto
-        if (IsOwner)
+        // [LIMPIEZA] Forzar que la animación de "Sentado" esté apagada.
+        // Esto previene que herede el estado del prefab del Lobby al entrar a Gameplay.
+        if (animator != null)
         {
-            GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-            if (ui != null)
+            foreach (var param in animator.parameters)
             {
-                ui.ActualizarInventario(objetoEnMano.Value.ToString());
+                if (param.name == "isSitting")
+                {
+                    animator.SetBool("isSitting", false);
+                    break;
+                }
             }
         }
     }
@@ -84,141 +122,155 @@ public class PlayerState : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         isDead.OnValueChanged -= OnDeathStateChanged;
-        objetoEnMano.OnValueChanged -= OnObjetoCambiado;
         base.OnNetworkDespawn();
     }
 
     private void OnDeathStateChanged(bool estadoAnterior, bool estadoNuevo)
     {
-        // Si acabamos de morir de verdad
         if (estadoNuevo == true && estadoAnterior == false)
         {
             ApplyDeathPhysics();
+            
+            // MECÁNICA AMANTES
+            if (IsServer && amanteId.Value != 9999)
+            {
+                if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(amanteId.Value, out NetworkObject amanteObj))
+                {
+                    PlayerState psAmante = amanteObj.GetComponent<PlayerState>();
+                    if (psAmante != null && !psAmante.isDead.Value) psAmante.isDead.Value = true;
+                }
+            }
+
+            // [NUEVO] Si el jugador tenía un oficio, suelta el objeto al morir (Herencia)
+            if (IsServer)
+            {
+                SoltarObjetoOficio(rolAldea.Value);
+            }
+        }
+        else if (estadoNuevo == false && estadoAnterior == true)
+        {
+            ApplyResurrectionPhysics();
+        }
+    }
+
+    private void SoltarObjetoOficio(RolAldea rol)
+    {
+        if (rol == RolAldea.Ninguno || prefabsOficio == null) return;
+
+        foreach (var mapping in prefabsOficio)
+        {
+            if (mapping.rol == rol && mapping.prefab != null)
+            {
+                GameObject obj = Instantiate(mapping.prefab, transform.position + Vector3.up * 1.5f, Quaternion.identity);
+                NetworkObject netObj = obj.GetComponent<NetworkObject>();
+                if (netObj != null)
+                {
+                    netObj.Spawn();
+                    Debug.Log($"[Servidor] El jugador {OwnerClientId} era {rol} y ha soltado su herramienta al morir.");
+                }
+                break;
+            }
+        }
+    }
+
+    private void ApplyResurrectionPhysics()
+    {
+        if (characterController != null) characterController.enabled = true;
+        if (thirdPersonController != null) thirdPersonController.enabled = true;
+        
+        if (IsOwner)
+        {
+            if (TryGetComponent(out UnityEngine.InputSystem.PlayerInput pi)) pi.enabled = true;
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            if (_spectatorController != null) _spectatorController.enabled = false;
+        }
+
+        if (animator != null)
+        {
+            animator.ResetTrigger("Muerte");
+            animator.SetTrigger("Revivir"); 
         }
     }
 
     private void ApplyDeathPhysics()
     {
-        Debug.Log($"[Resolución de Combate] Reproduciendo animación de Muerte para el jugador {OwnerClientId}.");
-
-        // [NUEVO] Le avisamos al Juez para que compruebe si la partida terminó con esta muerte
         if (IsServer)
         {
-            GameManager gm = Object.FindFirstObjectByType<GameManager>();
+            GameManager gm = FindFirstObjectByType<GameManager>();
             if (gm != null) gm.CheckWinConditions();
         }
 
-        // Desactivamos el control del motor de colisión para que sea un objeto estático
-        if (characterController != null) characterController.enabled = false;
-        
-        // Desactivamos el script principal de movimiento (ya no puede correr ni saltar)
-        if (thirdPersonController != null) thirdPersonController.enabled = false;
+        if (IsOwner)
+        {
+            if (TryGetComponent(out StarterAssetsInputs inputs))
+            {
+                inputs.isInputLocked = true;
+                inputs.move = Vector2.zero;
+                inputs.look = Vector2.zero;
+                inputs.jump = false;
+                inputs.sprint = false;
+            }
 
-        // [NUEVO] ¡Ya no apagamos el Animador! Le ordenamos que dispare su animación de muerte.
+            GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+            if (ui != null) ui.ToggleScroll(false);
+
+            if (_spectatorController != null) _spectatorController.enabled = true;
+        }
+        
         if (animator != null)
         {
             animator.SetTrigger("Muerte");
-            
-            // Opcional: Asegurarnos de que el jugador no siga "corriendo" visualmente en la muerte
+            animator.SetBool("IsReadingScroll", false);
             animator.SetFloat("Speed", 0f);
             animator.SetFloat("MotionSpeed", 0f);
         }
-
-        // Ya no rotamos forzosamente 90 grados ni tocamos el Transform, la animación se encargará de tirarlo.
     }
 
-    [Rpc(SendTo.Server)] // Mandado desde tu personaje (Tiene permiso Owner 100% garantizado)
+    [ServerRpc]
+    public void SuicideServerRpc()
+    {
+        isDead.Value = true;
+    }
+
+    [Rpc(SendTo.Server)] 
     public void EnviarMiVotoServerRpc(ulong candidatoId)
     {
-        // Esto solo lo lee el Servidor cuando recibe tu voto
-        GameManager gm = Object.FindFirstObjectByType<GameManager>();
-        if (gm != null)
-        {
-            gm.RegistrarVotoCentralizado(OwnerClientId, candidatoId);
-        }
+        GameManager gm = FindFirstObjectByType<GameManager>();
+        if (gm != null) gm.RegistrarVotoCentralizado(OwnerClientId, candidatoId);
     }
 
-    // --- MÓDULO 7: INVENTARIO AUTORITATIVO ---
-
-    // [Objetivo 2] Método que el cliente invoca para pedirle permiso al Servidor de coger un objeto.
     [Rpc(SendTo.Server)]
-    public void RecogerObjetoServerRpc(TipoObjeto nuevoObjeto)
+    public void NotificarTareaCompletadaServerRpc()
     {
-        // 1. Guard de Autoridad Suprema: Si el jugador está muerto, el servidor simplemente ignora el intento de trampa.
-        if (isDead.Value)
-        {
-            Debug.LogWarning($"[Seguridad Server] El fantasma {OwnerClientId} intentó recoger un objeto ({nuevoObjeto}). Acción Denegada.");
-            return;
-        }
-
-        // 2. Modificación del estado real en el servidor. Todos los clientes serán notificados por la NetworkVariable.
-        objetoEnMano.Value = nuevoObjeto;
-        Debug.Log($"[Server] El jugador {OwnerClientId} ha recogido exitosamente: {nuevoObjeto}");
+        tareasCompletadasHoy.Value++;
     }
 
-    // [Objetivo 3] Callback disparado en las computadoras de TODO el mundo cuando el servidor cambia la variable.
-    private void OnObjetoCambiado(TipoObjeto viejo, TipoObjeto nuevo)
+    [ClientRpc]
+    public void CambioRolPrivadoClientRpc(bool nuevoRolEsLobo, ClientRpcParams rpcParams = default)
     {
-        ActualizarVisualizacionObjeto(nuevo);
-
-        // [Nuevo HUD] Si somos el jugador de esta PC, actualizamos nuestro recuadro visual del inventario
-        if (IsOwner)
+        Debug.Log($"<color=yellow>🎭 [Ladrón] Ahora eres: {(nuevoRolEsLobo ? "Lobo" : "Aldeano")} 🎭</color>");
+        
+        GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+        if (ui != null)
         {
-            GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-            if (ui != null)
-            {
-                ui.ActualizarInventario(nuevo.ToString());
-            }
+            // Forzar repintado de UI
+            PlayerInventory inv = GetComponent<PlayerInventory>();
+            if (inv != null) ui.ActualizarMonedas(inv.monedas.Value); 
         }
     }
 
-    // Lógica pura de visualización local
-    private void ActualizarVisualizacionObjeto(TipoObjeto obj)
-    {
-        // Primero, apagamos todo por seguridad
-        if (modeloAntorcha != null) modeloAntorcha.SetActive(false);
-        if (modeloPocion != null) modeloPocion.SetActive(false);
-        if (modeloDaga != null) modeloDaga.SetActive(false);
-
-        // Encendemos solo el que diga el Servidor que tenemos
-        switch (obj)
-        {
-            case TipoObjeto.Antorcha:
-                if (modeloAntorcha != null) modeloAntorcha.SetActive(true);
-                break;
-            case TipoObjeto.Pocion:
-                if (modeloPocion != null) modeloPocion.SetActive(true);
-                break;
-            case TipoObjeto.Daga:
-                if (modeloDaga != null) modeloDaga.SetActive(true);
-                break;
-            case TipoObjeto.Ninguno:
-                // No hacemos nada, ya hemos apagado todo
-                break;
-        }
-    }
-
-    // --- SISTEMA DE TELETRANSPORTE ANTI-BUGS DE RED ---
-    
-    // [Objetivo] El servidor nos ordena movernos a nosotros (el dueño local) para evitar conflictos con el CharacterController
     [ClientRpc]
     public void ForzarTeletransporteClientRpc(Vector3 nuevaPosicion, Quaternion nuevaRotacion, ClientRpcParams rpcParams = default)
     {
-        Debug.Log($"<color=cyan>[Red]</color> El servidor me ordena viajar a la asamblea: {nuevaPosicion}");
-        
-        // 1. Apagamos el motor físico para que no rechace el viaje por "chocar" con el aire
         if (characterController != null) characterController.enabled = false;
         if (thirdPersonController != null) thirdPersonController.enabled = false;
 
-        // 2. Nos movemos en la realidad local del cliente (lo cual se sincronizará hacia el servidor)
-        // [Parche de Altura] Elevamos medio metro para evitar que el CharacterController inicie clavado en la malla del suelo y se caiga.
-        transform.position = nuevaPosicion + Vector3.up * 1.5f; // Mayor altura para evitar traspasar el suelo
+        transform.position = nuevaPosicion + Vector3.up * 1.5f; 
         transform.rotation = nuevaRotacion;
         
-        // FORZAMOS LA SINCRONIZACIÓN FÍSICA de Unity antes de volver a encender el motor
         Physics.SyncTransforms();
 
-        // 3. Encendemos los motores de nuevo
         if (characterController != null) characterController.enabled = true;
         if (thirdPersonController != null) thirdPersonController.enabled = true;
     }

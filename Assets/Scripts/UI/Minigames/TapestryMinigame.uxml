@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:ui="UnityEngine.UIElements"
+    xmlns:uie="UnityEditor.UIElements"
+    xsi:noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd"
+>
+    <!-- Contenedor general centrado -->
+    <ui:VisualElement name="ScreenOverlay" style="flex-grow: 1; justify-content: center; align-items: center; background-color: rgba(0, 0, 0, 0.7);">
+        
+        <!-- Panel de Tapiz -->
+        <ui:VisualElement name="MainPanel" class="tapestry-container">
+            
+            <!-- Capa de Hilos (Z-Order bajo para que los carretes estén encima) -->
+            <ui:VisualElement name="ThreadsLayer" style="position: absolute; width: 100%; height: 100%; pointer-events: none;" />
+            
+            <!-- Cabecera Informativa -->
+            <ui:VisualElement name="Header" class="tapestry-header">
+                <ui:Label name="ProgressLabel" text="TAPESTRY 1/3" class="tapestry-badge" />
+                <ui:Label name="DifficultyLabel" text="DIFICULTAD: FACIL" class="tapestry-badge" />
+            </ui:VisualElement>
+
+            <!-- Columnas (Se llenarán por código dinámicamente) -->
+            <ui:VisualElement name="ColumnsContainer" style="flex-grow: 1; flex-direction: row; justify-content: space-between; align-items: stretch; margin-top: 30px;" />
+
+        </ui:VisualElement>
+
+        <!-- Instrucción Escape -->
+        <ui:Label text="[ESC] CERRAR" style="position: absolute; bottom: 20px; color: #6b5a45; font-size: 14px;" />
+
+    </ui:VisualElement>
+</ui:UXML>

@@ -60,8 +60,8 @@ public class AutomatedGameManagerModifier
                 txt.color = Color.white;
             }
 
-            // Agregamos nuestro script mágico para que el botón interactúe con el GameManager sin arrastrar cosas
-            buttonObj.AddComponent<GameUI>();
+            // Nota: el botón se conecta a GameManager a través de LobbyUI (Regla 5: Desacoplamiento UI)
+            // No se añade ningún componente adicional aquí; LobbyUI gestiona el startGameButton por referencia.
             sceneDirty = true;
             
             Debug.Log("[AutomatedGameManager] Botón INICIAR PARTIDA añadido al Canvas.");

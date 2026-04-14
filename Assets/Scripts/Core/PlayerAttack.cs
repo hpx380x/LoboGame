@@ -5,6 +5,7 @@ using UnityEngine.InputSystem;
 public class PlayerAttack : NetworkBehaviour
 {
     private PlayerState playerState;
+    private PlayerStatusEffects statusEffects;
     private GameManager gameManager;
 
     [Tooltip("La máscara de caja de 'Capa' (Layer) a la que pertenecerán los otros jugadores para poder tocarlos con el cuchillo")]
@@ -13,6 +14,7 @@ public class PlayerAttack : NetworkBehaviour
     private void Start()
     {
         playerState = GetComponent<PlayerState>();
+        statusEffects = GetComponent<PlayerStatusEffects>();
         // Intentamos encontrar al cerebro del juego si hemos caído en la escena principal
         gameManager = FindFirstObjectByType<GameManager>();
     }
@@ -23,10 +25,11 @@ public class PlayerAttack : NetworkBehaviour
         if (!IsOwner) return;
 
         // Comprobaciones de Seguridad Local antes de soltar un ataque al vacío:
-        // 1. Soy lobo. 2. Estoy vivo. 3. Está la FASE DE LA NOCHE en curso.
+        // 1. Soy lobo. 2. Estoy vivo. 3. Está la FASE DE LA NOCHE en curso (o tengo el poder del Lobo Albino).
         if (playerState != null && playerState.isWolf.Value && !playerState.isDead.Value)
         {
-            if (gameManager != null && gameManager.currentPhase.Value == GamePhase.Noche)
+            bool puedeAtacar = (gameManager != null && gameManager.currentPhase.Value == GamePhase.Noche) || (statusEffects != null && statusEffects.hasLoboAlbinoPower.Value);
+            if (puedeAtacar)
             {
                 // Pulsar E (Teclado) usando el NUEVO Input System -> Solo en tu compu local
                 if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
@@ -91,10 +94,20 @@ public class PlayerAttack : NetworkBehaviour
         }
 
         // ¿Realmente es de noche y no usó un truco para congelar el reloj localmente?
-        if (gameManager == null || gameManager.currentPhase.Value != GamePhase.Noche)
+        bool esNoche = gameManager != null && gameManager.currentPhase.Value == GamePhase.Noche;
+        bool tienePoderAlbino = statusEffects != null && statusEffects.hasLoboAlbinoPower.Value;
+
+        if (!esNoche && !tienePoderAlbino)
         {
-            Debug.LogWarning($"[HACK] El jugador {OwnerClientId} solicitó matar... de Día.");
+            Debug.LogWarning($"[HACK] El jugador {OwnerClientId} solicitó matar... de Día y sin poderes de Lobo Albino.");
             return;
+        }
+
+        // Si usó el ataque de día gracias al Lobo Albino, lo gastamos
+        if (!esNoche && tienePoderAlbino)
+        {
+            if (statusEffects != null) statusEffects.hasLoboAlbinoPower.Value = false;
+            Debug.Log($"<color=white>[Leyenda] El lobo {OwnerClientId} ha consumido su ataque de Día de Lobo Albino.</color>");
         }
 
         // Buscamos el DNI de su víctima en la base de datos de los objetos vivos
@@ -112,8 +125,18 @@ public class PlayerAttack : NetworkBehaviour
 
             // Ejecución formalizada
             PlayerState estadoDeLaVictima = victimaObj.GetComponent<PlayerState>();
+            PlayerStatusEffects statusVictima = victimaObj.GetComponent<PlayerStatusEffects>();
             if (estadoDeLaVictima != null && !estadoDeLaVictima.isDead.Value)
             {
+                // [Mecánica Cota De Malla] Comprobar si tiene el chaleco protector equipado
+                if (statusVictima != null && statusVictima.tieneCotaMalla.Value)
+                {
+                    // La armadura se rompe pero el aldeano sobrevive
+                    statusVictima.tieneCotaMalla.Value = false;
+                    Debug.Log($"<color=cyan>[Servidor] El agresor {OwnerClientId} atacó a {victimaNetworkId}, ¡pero su COTA DE MALLA le salvó la vida y se rompió!</color>");
+                    return; // Abortamos el asesinato
+                }
+
                 estadoDeLaVictima.isDead.Value = true; // Sentencia de muerte escrita en la variable Autorizada.
                 Debug.Log($"<color=red>====== ¡ASESINATO CONCEDIDO! ====== Lobo [{OwnerClientId}] fulminó a Aldeano [{victimaNetworkId}]</color>");
             }

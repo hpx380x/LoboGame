@@ -1,0 +1,64 @@
+/* Panel de pergamino medieval */
+.tapestry-container {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    padding: 30px;
+    background-color: #1a1410;
+    border-width: 8px;
+    border-color: #4a3b2f;
+    border-radius: 12px;
+    width: 600px;
+    height: 400px;
+}
+
+/* Columna de carretes */
+.spool-column {
+    flex-direction: column;
+    justify-content: space-around;
+    height: 100%;
+}
+
+/* El carrete (Círculo de madera) */
+.spool-node {
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    background-color: #5d4037;
+    border-width: 3px;
+    border-color: #3e2723;
+    justify-content: center;
+    align-items: center;
+    transition-property: scale;
+    transition-duration: 0.1s;
+}
+
+.spool-node:hover {
+    scale: 1.1;
+}
+
+/* El punto de color centro */
+.spool-color-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+}
+
+/* Cabecera / Info */
+.tapestry-header {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    flex-direction: row;
+}
+
+.tapestry-badge {
+    padding: 4px 8px;
+    background-color: rgba(74, 59, 47, 0.8);
+    border-width: 1px;
+    border-color: rgba(181, 142, 74, 0.5);
+    border-radius: 4px;
+    font-size: 10px;
+    color: #e6c88e;
+    margin-right: 10px;
+}

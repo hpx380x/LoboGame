@@ -1,91 +1,199 @@
 using UnityEngine;
 using Unity.Netcode;
 using UnityEngine.InputSystem;
+using Core.Enums;
 
+// ─── Enums ────────────────────────────────────────────────────────────────────
 public enum TipoInteraccion
 {
-    Instantanea,           // Pulsas E y te lo da (o abre un panel de minijuego externo)
-    MantenerBoton,         // Tienes que dejar pulsada la E durante X segundos (ej: afilando daga)
-    PulsarRepetidamente    // Tienes que pulsar la E muchas veces para llenar una barra
+    Instantanea,        // Pulsa E una vez (o automático al pisar)
+    MantenerBoton,      // Mantener E durante X segundos (ej: afilar daga)
+    PulsarRepetidamente,// Golpear E muchas veces (ej: martillar)
+    MinijuegoUI         // Ejecuta un Canvas UI interactivo (Requiere prefab)
 }
 
+/// <summary>
+/// Punto de tarea en el mundo. Cada estación tiene un ID único, nombre visible en HUD
+/// y tipo de minijuego. El servidor asigna cuáles corresponden a cada jugador;
+/// el cliente solo puede interactuar con las suyas.
+///
+/// NUEVO FLUJO:
+///   1. El servidor asigna 2 tareas al jugador (pool de elección).
+///   2. Al pisar una estación disponible → queda "EnProgreso" (bloqueado).
+///   3. Si se aleja en mitad del progreso → FALLO → avanza a la siguiente disponible.
+///   4. Si completa → avanza a la siguiente disponible.
+/// </summary>
 public class TaskPoint : MonoBehaviour
 {
-    [Header("Recompensa de la Tarea")]
-    [Tooltip("El objeto que recibirá el jugador al acercarse aquí")]
-    public TipoObjeto objetoRecompensa = TipoObjeto.Antorcha;
+    // ─── Inspector ────────────────────────────────────────────────────────────
+    [Header("Identificación")]
+    [Tooltip("ID único. Se genera automáticamente por ruta en jerarquía si está vacío.")]
+    public string taskId = "";
+    [Tooltip("Nombre visible en el HUD del jugador.")]
+    public string nombreTarea = "Tarea sin nombre";
 
-    [Header("Tipo de Minijuego In-Game")]
-    public TipoInteraccion tipoDeMinijuego = TipoInteraccion.Instantanea;
+    [Header("Recompensa")]
+    [Tooltip("Objeto que recibirá el jugador al completar la tarea directamente (Ruta de Riesgo).")]
+    public TipoObjeto objetoRecompensa = TipoObjeto.Ninguno;
+    [Tooltip("Cantidad de monedas que gana el jugador al completar la tarea (Ruta Segura).")]
+    public int monedasRecompensa = 1;
 
-    [Tooltip("Segundos que hay que mantener pulsado, o toques necesarios (Solo para los minijuegos físicos)")]
-    public float objetivoMinijuego = 5f; 
-
-    // Progreso actual del minijuego in-game
-    private float progresoActual = 0f;
-
-    [Header("Ajustes")]
-    [Tooltip("Si usas Instantanea, ¿Requiere pulsar la E o te lo da solo con pisar?")]
+    [Header("Minijuego")]
+    public TipoInteraccion tipoDeMinijuego = TipoInteraccion.MantenerBoton;
+    [Tooltip("Segundos a mantener pulsado (MantenerBoton) o toques necesarios (PulsarRepetidamente).")]
+    public float objetivoMinijuego = 5f;
+    [Tooltip("Para Instantanea: ¿requiere pulsar E o se activa solo al pisar?")]
     public bool requierePulsarBoton = true;
+    [Tooltip("Prefab del minijuego 2D a spawnear (si el tipo es MinijuegoUI).")]
+    public GameObject prefabMinijuegoUI;
 
-    // Memoria interna para saber si ESTAMOS nosotros en la zona
-    private bool jugadorLocalCerca = false;
-    private bool mensajeMostrado = false; // [NUEVO] Evitamos spam en la consola
-    private bool minijuegoEnProgreso = false; // [NUEVO] Evita doble activación
+    [Header("Collider")]
+    [Tooltip("Margen extra (metros) que se suma al tamaño visual al auto-ajustar el BoxCollider.")]
+    public float margenCollider = 0.2f;
+
+    // Visual (Opcional): Objeto que se activa cuando esta tarea es del jugador local (luz, part\u00edcula...).
+    public GameObject indicadorAsignada;
+
+    // ─── Estado interno ───────────────────────────────────────────────────────
+
+    // SERVER: ¿esta tarea fue asignada al jugador local de esta máquina?
+    private bool esAsignadaAlJugadorLocal   = false;
+    // ¿El jugador local está físicamente dentro del trigger?
+    private bool jugadorLocalCerca          = false;
+    // ¿Hay un minijuego corriendo ahora mismo?
+    private bool minijuegoEnProgreso        = false;
+    private MinigameBase minijuegoInstanciado = null;
+    private float progresoActual            = 0f;
+    
+    // [Memoria de Minijuegos] Para que no se reseteen al cerrar el panel
+    [HideInInspector] public bool minigameInitialized = false;
+    [HideInInspector] public int[] runeState = new int[3];
+    [HideInInspector] public int[] runeTarget = new int[3];
+
+    // [Memoria Tapiz]
+    [System.Serializable]
+    public struct TapestryConnectionData
+    {
+        public int phase; // Índice de columna (0, 1, 2...)
+        public int fromIdx;
+        public int toIdx;
+        public string colorHex;
+    }
+    [HideInInspector] public System.Collections.Generic.List<TapestryConnectionData> tapestryState = new System.Collections.Generic.List<TapestryConnectionData>();
+    [HideInInspector] public int tapestryLevel = 0; // 0 a 2 (para completar 3 niveles)
+    
+    // [Memoria Puzzle 3x3]
+    [HideInInspector] public int[] slidingPuzzleState = new int[9];
+
+    // Referencia al PlayerState local
     private PlayerState jugadorLocalState;
     private Collider miCollider;
 
+    // Renderers para tint visual
+    private MeshRenderer[] renderersPropios;
+    private Color[] coloresOriginales;
+
+    // ─── Unity ────────────────────────────────────────────────────────────────
+
     private void Awake()
     {
+        // Auto-generar ID por ruta en jerarquía (único dentro de la escena)
+        if (string.IsNullOrEmpty(taskId))
+            taskId = GenerarRutaJerarquica();
+
         miCollider = GetComponent<Collider>();
+
+        // Guardar colores base de todos los MeshRenderers hijos
+        renderersPropios = GetComponentsInChildren<MeshRenderer>();
+        coloresOriginales = new Color[renderersPropios.Length];
+        for (int i = 0; i < renderersPropios.Length; i++)
+        {
+            Material m = renderersPropios[i].sharedMaterial;
+            if (m == null) continue;
+            coloresOriginales[i] = m.HasProperty("_BaseColor")
+                ? m.GetColor("_BaseColor")
+                : m.color;
+        }
     }
+
+    private void Start()
+    {
+        AjustarBoxCollider();   // Fix automático del BoxCollider al mesh
+        AplicarTintNoAsignada();// Por defecto: gris sutil (no asignada)
+    }
+
+    // ─── API pública ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Llamado por la ClientRpc del GameManager para marcar si esta estación
+    /// pertenece al pool de tareas del jugador local.
+    /// </summary>
+    public void MarcarComoAsignada(bool asignada)
+    {
+        esAsignadaAlJugadorLocal = asignada;
+        if (indicadorAsignada != null) indicadorAsignada.SetActive(asignada);
+
+        if (asignada) AplicarTintDisponible();
+        else          AplicarTintNoAsignada();
+    }
+
+    // ─── Triggers de colisión ─────────────────────────────────────────────────
 
     private void OnTriggerEnter(Collider other)
     {
-        // 0. Si el mapa acaba de cargar, ignoramos unos segundos para que los jugadores 
-        // no choquen fantasmálmente en la coordenada (0,0,0) antes de ser teletransportados.
-        if (Time.timeSinceLevelLoad < 2f) return;
+        if (Time.timeSinceLevelLoad < 2f) return;   // Ignora la carga inicial
+        if (other.isTrigger) return;                 // Solo cuerpos sólidos
 
-        // [NUEVO] Si lo que nos ha tocado es otro colisionador "invisible" (ej. el aura de ataque del Lobo o un radar), lo ignoramos.
-        // Solo queremos que se active cuando el CUERPO SÓLIDO del personaje (CharacterController) choque contra la mesa.
-        if (other.isTrigger) return;
+        NetworkObject netObj = other.GetComponent<NetworkObject>()
+                            ?? other.GetComponentInParent<NetworkObject>();
+        if (netObj == null || !netObj.IsOwner) return;
 
-        // 1. Verificamos si lo que acaba de tocar la zona es un jugador conectado en red
-        NetworkObject netObj = other.GetComponent<NetworkObject>();
-        if(netObj == null) netObj = other.GetComponentInParent<NetworkObject>();
-        
-        // 2. Comprobamos si es NUESTRO jugador (el que controlamos en nuestra pantalla de PC)
-        // (Ignoramos si es un amigo atravesando la zona en nuestra pantalla)
-        if (netObj != null && netObj.IsOwner)
+        PlayerState ps = netObj.GetComponent<PlayerState>();
+        if (ps == null || ps.isDead.Value) return;
+
+        jugadorLocalState = ps;
+        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+
+        // ── 1. ¿No está asignada a este jugador? ─────────────────────────────
+        if (!esAsignadaAlJugadorLocal)
         {
-            jugadorLocalState = netObj.GetComponent<PlayerState>();
-            if (jugadorLocalState != null && !jugadorLocalState.isDead.Value)
-            {
-                // [NUEVO] Anti-Grindeo: Si ya llevas este objeto exacto en las manos, te ignoramos.
-                if (jugadorLocalState.objetoEnMano.Value == objetoRecompensa)
-                {
-                    return;
-                }
+            if (ui != null) ui.MostrarMensajeTarea("Esta no es tu tarea.", 2f);
+            return;
+        }
 
-                if (!jugadorLocalCerca) // Solo la primera vez que entramos
-                {
-                    jugadorLocalCerca = true;
-                    
-                    if (requierePulsarBoton)
-                    {
-                        if (!mensajeMostrado && !minijuegoEnProgreso) // Imprimimos de una sola vez
-                        {
-                            Debug.Log($"<color=yellow>[Tarea]</color> Estás cerca de la máquina. Pulsa 'E' para hacer el minijuego de: {objetoRecompensa}");
-                            mensajeMostrado = true;
-                        }
-                    }
-                    else
-                    {
-                        // Si no requiere botón, empieza el minijuego o da la recompensa instantánea al pisar
-                        IntentarIniciarMinijuegoSimuladoUI();
-                    }
-                }
+        // ── 2. ¿Hay otra tarea YA en progreso? ───────────────────────────────
+        if (ui != null && ui.GetTareaActivaId() != null && ui.GetTareaActivaId() != taskId)
+        {
+            ui.MostrarMensajeTarea("Ya tienes una tarea activa. ¡Termínala primero!", 2f);
+            jugadorLocalState = null;
+            return;
+        }
+
+        // ── 3. ¿Ya la completé antes? ────────────────────────────────────────
+        if (ui != null && ui.TareaEstaTerminada(taskId))
+        {
+            ui.MostrarMensajeTarea("Esta tarea ya está completada.", 2f);
+            jugadorLocalState = null;
+            return;
+        }
+
+        // ── 4. ¡Entramos! Bloquear esta tarea como activa ─────────────────────
+        if (!jugadorLocalCerca)
+        {
+            jugadorLocalCerca = true;
+            if (ui != null)
+            {
+                ui.SetTareaActiva(taskId); // Bloqueo: ninguna otra puede activarse
+                ui.MostrarMensajeTarea(
+                    requierePulsarBoton && tipoDeMinijuego == TipoInteraccion.Instantanea
+                        ? $"[E] {nombreTarea}"
+                        : $"Iniciando: {nombreTarea}",
+                    0f);
             }
+
+            // Para Instantanea sin botón → arranca ya
+            if (!requierePulsarBoton && tipoDeMinijuego == TipoInteraccion.Instantanea)
+                IntentarIniciarInstantanea();
         }
     }
 
@@ -93,201 +201,330 @@ public class TaskPoint : MonoBehaviour
     {
         if (other.isTrigger) return;
 
-        NetworkObject netObj = other.GetComponent<NetworkObject>();
-        if(netObj == null) netObj = other.GetComponentInParent<NetworkObject>();
-        if (netObj != null && netObj.IsOwner)
-        {
-            jugadorLocalCerca = false;
-            mensajeMostrado = false; // Reset al mensaje amarillo
-            jugadorLocalState = null;
-            
-            // Si nos alejamos a mitad del afilado de la daga, perdemos el progreso
-            if (minijuegoEnProgreso && (tipoDeMinijuego == TipoInteraccion.MantenerBoton || tipoDeMinijuego == TipoInteraccion.PulsarRepetidamente))
-            {
-                Debug.Log("<color=red>[Tarea]</color> Te alejaste. El progreso del minijuego se ha perdido.");
-                minijuegoEnProgreso = false;
-                progresoActual = 0f;
+        NetworkObject netObj = other.GetComponent<NetworkObject>()
+                            ?? other.GetComponentInParent<NetworkObject>();
+        if (netObj == null || !netObj.IsOwner) return;
 
-                GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-                if (ui != null) ui.MostrarBarraProgreso(false);
-            }
+        // Si nos fuimos mientras había un minijuego en curso → Solo cancelamos el progreso
+        if (minijuegoEnProgreso)
+        {
+            Debug.Log($"<color=yellow>[Tarea '{nombreTarea}']</color> El jugador se alejó. Progreso reiniciado.");
+            GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+            if (ui != null) ui.MostrarMensajeTarea("Te alejaste. Progreso reiniciado.", 2f);
         }
+
+        ResetearEstadoLocal();
     }
+
+    // ─── Update: bucle del minijuego ──────────────────────────────────────────
 
     private void Update()
     {
-        // Si creemos que el jugador está cerca...
-        if (jugadorLocalCerca && jugadorLocalState != null)
+        if (!jugadorLocalCerca || jugadorLocalState == null) return;
+
+        // Anti-bug: ClosestPoint para detectar salidas silenciosas
+        if (miCollider != null)
         {
-            // [NUEVO] Si mientras estabas aquí dentro lograste coger el objeto, apagamos la mesa para ti.
-            if (jugadorLocalState.objetoEnMano.Value == objetoRecompensa)
+            Vector3 puntoCercano = miCollider.ClosestPoint(jugadorLocalState.transform.position);
+            // Umbral reducido: 0.5 m (el anterior 1.5 m era demasiado permisivo)
+            if (Vector3.Distance(jugadorLocalState.transform.position, puntoCercano) > 0.5f)
             {
-                jugadorLocalCerca = false;
-                mensajeMostrado = false;
                 if (minijuegoEnProgreso)
                 {
-                    minijuegoEnProgreso = false;
-                    progresoActual = 0f;
                     GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-                    if (ui != null) ui.MostrarBarraProgreso(false);
+                    if (ui != null) ui.MostrarMensajeTarea("Te alejaste. Progreso reiniciado.", 2f);
                 }
+                ResetearEstadoLocal();
                 return;
             }
+        }
 
-            // [Sistema Anti-Bugs] Evita que Unity crea que sigues dentro al ser teletransportado o al salir rápido
-            if (miCollider != null)
-            {
-                // Magia matemática: ClosestPoint encuentra el borde físico de la caja verde.
-                // Si la distancia entre la piel del jugador y la caja verde es mayor a 1.5 metros, nos fuimos.
-                Vector3 puntoSuperficie = miCollider.ClosestPoint(jugadorLocalState.transform.position);
+        if (Keyboard.current == null) return;
+
+        switch (tipoDeMinijuego)
+        {
+            case TipoInteraccion.Instantanea:
+                if (requierePulsarBoton && !minijuegoEnProgreso
+                    && Keyboard.current.eKey.wasPressedThisFrame)
+                    IntentarIniciarInstantanea();
+                break;
+
+            case TipoInteraccion.MantenerBoton:
+                TickMantener();
+                break;
+
+            case TipoInteraccion.PulsarRepetidamente:
+                TickMartillar();
+                break;
                 
-                if (Vector3.Distance(jugadorLocalState.transform.position, puntoSuperficie) > 1.5f)
+            case TipoInteraccion.MinijuegoUI:
+                if (!minijuegoEnProgreso && Keyboard.current.eKey.wasPressedThisFrame)
                 {
-                    // El jugador ya no está aquí físicamente
-                    jugadorLocalCerca = false;
-                    mensajeMostrado = false;
-                    jugadorLocalState = null;
-                    
-                    if (minijuegoEnProgreso)
-                    {
-                        minijuegoEnProgreso = false;
-                        progresoActual = 0f;
-                        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-                        if (ui != null) ui.MostrarBarraProgreso(false);
-                    }
-                    return;
+                    IntentarIniciarMinijuegoUI();
                 }
-            }
-
-            // ============================================
-            // LOGICA DEL MINIJUEGO IN-GAME DIRECTO
-            // ============================================
-
-            if (Keyboard.current == null) return;
-
-            if (tipoDeMinijuego == TipoInteraccion.Instantanea)
-            {
-                // Misión Instantánea (o abridora de panel UI)
-                if (requierePulsarBoton && !minijuegoEnProgreso && Keyboard.current.eKey.wasPressedThisFrame)
-                {
-                    IntentarIniciarMinijuegoSimuladoUI();
-                }
-            }
-            else if (tipoDeMinijuego == TipoInteraccion.MantenerBoton)
-            {
-                // Misión Física: Mantener forjado / afilado
-                if (Keyboard.current.eKey.isPressed)
-                {
-                    if (!minijuegoEnProgreso) // Acabamos de pulsar la tecla por primera vez
-                    {
-                        minijuegoEnProgreso = true;
-                        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-                        if (ui != null) ui.MostrarBarraProgreso(true);
-                    }
-
-                    progresoActual += Time.deltaTime;
-                    
-                    GameplayUI uiHud = Object.FindFirstObjectByType<GameplayUI>();
-                    if (uiHud != null) uiHud.ActualizarBarraProgreso(progresoActual, objetivoMinijuego);
-
-                    // Solo imprimimos cada segundo entero para no reventar la consola
-                    if (Mathf.Floor(progresoActual) > Mathf.Floor(progresoActual - Time.deltaTime))
-                    {
-                        Debug.Log($"<color=orange>[Forjando]</color> Afilando daga... {Mathf.Round(progresoActual)}s / {objetivoMinijuego}s");
-                    }
-
-                    if (progresoActual >= objetivoMinijuego)
-                    {
-                        CompletarMinijuegoInGame();
-                    }
-                }
-                else if (minijuegoEnProgreso) // Si suelta la tecla a medias
-                {
-                    Debug.Log("<color=red>[Forjando]</color> Dejaste de afilar. Progreso reiniciado.");
-                    progresoActual = 0f;
-                    minijuegoEnProgreso = false;
-
-                    GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-                    if (ui != null) ui.MostrarBarraProgreso(false);
-                }
-            }
-            else if (tipoDeMinijuego == TipoInteraccion.PulsarRepetidamente)
-            {
-                // Misión Física: Martillar pulsando E a toda pastilla
-                if (Keyboard.current.eKey.wasPressedThisFrame)
-                {
-                    if (!minijuegoEnProgreso)
-                    {
-                        minijuegoEnProgreso = true;
-                        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-                        if (ui != null) ui.MostrarBarraProgreso(true);
-                    }
-
-                    progresoActual += 1f;
-
-                    GameplayUI uiHud = Object.FindFirstObjectByType<GameplayUI>();
-                    if (uiHud != null) uiHud.ActualizarBarraProgreso(progresoActual, objetivoMinijuego);
-
-                    Debug.Log($"<color=orange>[Martillando]</color> Golpe... {progresoActual} / {objetivoMinijuego}");
-
-                    if (progresoActual >= objetivoMinijuego)
-                    {
-                        CompletarMinijuegoInGame();
-                    }
-                }
-            }
+                break;
         }
     }
 
-    private void CompletarMinijuegoInGame()
+    // ─── Tipos de minijuego ───────────────────────────────────────────────────
+
+    private void IntentarIniciarInstantanea()
     {
-        Debug.Log("<color=green>[Misión In-Game]</color> ¡Objeto terminado con éxito!");
+        if (jugadorLocalState == null || jugadorLocalState.isDead.Value) return;
+        if (minijuegoEnProgreso) return;
+        minijuegoEnProgreso = true;
+        StartCoroutine(MinijuegoInstantaneo());
+    }
+
+    private System.Collections.IEnumerator MinijuegoInstantaneo()
+    {
+        // Barra de carga de 1 segundo para dar feedback
+        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+        if (ui != null) ui.MostrarBarraProgreso(true);
+
+        float t = 0f;
+        while (t < 1f)
+        {
+            t += Time.deltaTime;
+            if (ui != null) ui.ActualizarBarraProgreso(t, 1f);
+            yield return null;
+        }
+
+        CompletarMinijuego();
+    }
+
+    private void IntentarIniciarMinijuegoUI()
+    {
+        if (jugadorLocalState == null || jugadorLocalState.isDead.Value) return;
+        if (minijuegoEnProgreso) return;
+        
+        if (prefabMinijuegoUI == null)
+        {
+            Debug.LogError($"[TaskPoint] Falta asignar el PREFAB del minijuego UI en la tarea {nombreTarea}");
+            return;
+        }
+
+        minijuegoEnProgreso = true;
+        
+        // Instanciamos el Canvas del minijuego
+        GameObject minijuegoGO = Instantiate(prefabMinijuegoUI);
+        minijuegoInstanciado = minijuegoGO.GetComponent<MinigameBase>();
+        
+        if (minijuegoInstanciado != null)
+        {
+            minijuegoInstanciado.SetupMinigame(this);
+        }
+        else
+        {
+            Debug.LogError("El prefab no tiene ningún script que herede de MinigameBase");
+        }
+    }
+
+    public void MinijuegoResueltoPorUI()
+    {
+        CompletarMinijuego();
+    }
+
+    public void MinijuegoFalladoPorUI(string motivo)
+    {
+        FallarTarea(motivo);
+    }
+
+    private void TickMantener()
+    {
+        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+
+        if (Keyboard.current.eKey.isPressed)
+        {
+            if (!minijuegoEnProgreso)
+            {
+                minijuegoEnProgreso = true;
+                if (ui != null) ui.MostrarBarraProgreso(true);
+            }
+
+            progresoActual += Time.deltaTime;
+            if (ui != null) ui.ActualizarBarraProgreso(progresoActual, objetivoMinijuego);
+
+            if (progresoActual >= objetivoMinijuego)
+                CompletarMinijuego();
+        }
+        else if (minijuegoEnProgreso)
+        {
+            // Soltar E → reinicia progreso pero NO falla (sigue bloqueado)
+            progresoActual = 0f;
+            if (ui != null)
+            {
+                ui.MostrarBarraProgreso(false);
+                ui.MostrarMensajeTarea("Soltaste. Vuelve a mantener [E].", 1.5f);
+            }
+            // NO ponemos minijuegoEnProgreso = false para que siga bloqueado
+            // pero sí bajamos la bandera para que la barra se reinicie limpia
+            minijuegoEnProgreso = false;
+        }
+    }
+
+    private void TickMartillar()
+    {
+        if (!Keyboard.current.eKey.wasPressedThisFrame) return;
+
+        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+
+        if (!minijuegoEnProgreso)
+        {
+            minijuegoEnProgreso = true;
+            if (ui != null) ui.MostrarBarraProgreso(true);
+        }
+
+        progresoActual += 1f;
+        if (ui != null) ui.ActualizarBarraProgreso(progresoActual, objetivoMinijuego);
+
+        if (progresoActual >= objetivoMinijuego)
+            CompletarMinijuego();
+    }
+
+    // ─── Resolución ───────────────────────────────────────────────────────────
+
+    private void CompletarMinijuego()
+    {
+        if (jugadorLocalState == null || jugadorLocalState.isDead.Value) return;
+
+        Debug.Log($"<color=green>[Tarea '{nombreTarea}']</color> ¡COMPLETADA!");
         progresoActual = 0f;
         minijuegoEnProgreso = false;
 
         GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-        if (ui != null) ui.MostrarBarraProgreso(false);
-
-        EntregarRecompensa();
-    }
-
-    // El sistema antiguo si quisieras usar Paneles Externos
-    private void IntentarIniciarMinijuegoSimuladoUI()
-    {
-        if (jugadorLocalState == null || jugadorLocalState.isDead.Value) return;
-
-        Debug.Log($"<color=cyan>[Minijuego UI]</color> Abriendo panel de minijuego inventado para: {objetoRecompensa}...");
-        minijuegoEnProgreso = true;
-        
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
-
-        StartCoroutine(SimularResolucionMinijuego());
-    }
-
-    private System.Collections.IEnumerator SimularResolucionMinijuego()
-    {
-        yield return new WaitForSeconds(2f); // Finge que lo hiciste en la UI
-        
-        Debug.Log("<color=green>[Minijuego UI]</color> ¡Panel cerrado! Control devuelto.");
-        minijuegoEnProgreso = false;
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
-
-        EntregarRecompensa();
-    }
-
-    private void EntregarRecompensa()
-    {
-        if (jugadorLocalState != null && !jugadorLocalState.isDead.Value)
+        if (ui != null)
         {
-            // 3. Magia Pura: Le enviamos la petición oficial por radio al Servidor
-            jugadorLocalState.RecogerObjetoServerRpc(objetoRecompensa);
-            
-            Debug.Log($"<color=green>[Tarea] ¡Misión completada!</color> Solicitando {objetoRecompensa} al servidor.");
-            
-            // Opcional: Podrías destruirlo si solo sirve una vez, pero lo dejaremos 
-            // infinito como dispensador para hacer pruebas técnicas.
+            ui.MostrarBarraProgreso(false);
+            ui.CompletarTareaActiva(taskId);   // Avanza automáticamente a la siguiente
         }
+
+        // Indicar al servidor que completamos una tarea (para el conteo diario)
+        jugadorLocalState.NotificarTareaCompletadaServerRpc();
+
+        // Dar las recompensas de Econom\u00eda H\u00edbrida
+        PlayerInventory inv = jugadorLocalState.GetComponent<PlayerInventory>();
+        if (inv != null)
+        {
+            if (monedasRecompensa > 0)
+            {
+                inv.GanarMonedasServerRpc(monedasRecompensa);
+            }
+            if (objetoRecompensa != TipoObjeto.Ninguno)
+            {
+                inv.RecogerObjetoServerRpc(objetoRecompensa);
+            }
+        }
+
+        // Visual: turnar a verde/completada
+        AplicarTintCompletada();
+        if (indicadorAsignada != null) indicadorAsignada.SetActive(false);
+
+        ResetearEstadoLocal();
+    }
+
+    private void FallarTarea(string motivo)
+    {
+        progresoActual = 0f;
+        minijuegoEnProgreso = false;
+
+        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+        if (ui != null)
+        {
+            ui.MostrarBarraProgreso(false);
+            ui.FallarTareaActiva(taskId, motivo);  // Avanza a la siguiente disponible
+        }
+
+        // Visual: tachar / atenuar
+        AplicarTintFallada();
+        if (indicadorAsignada != null) indicadorAsignada.SetActive(false);
+    }
+
+    private void ResetearEstadoLocal()
+    {
+        if (minijuegoInstanciado != null)
+        {
+            minijuegoInstanciado.ForzarCierreDesdeExterno();
+            minijuegoInstanciado = null;
+        }
+
+        jugadorLocalCerca   = false;
+        jugadorLocalState   = null;
+        minijuegoEnProgreso = false;
+        progresoActual      = 0f;
+
+        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
+        if (ui != null)
+        {
+            ui.MostrarBarraProgreso(false);
+            ui.MostrarMensajeTarea("", 0f); // Limpiar mensaje de proximidad
+        }
+    }
+
+    // ─── BoxCollider Auto-Fix ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Calcula bounds combinados de todos los MeshRenderers hijo y ajusta el
+    /// BoxCollider para que coincida exactamente con el volumen visual + margen.
+    /// Arregla el bug de "puedo hacer tareas fuera del cuadrado".
+    /// </summary>
+    private void AjustarBoxCollider()
+    {
+        BoxCollider box = miCollider as BoxCollider;
+        if (box == null) return;
+
+        MeshRenderer[] meshes = GetComponentsInChildren<MeshRenderer>();
+        if (meshes.Length == 0) return;
+
+        // Calcular bounds combinados en WORLD space
+        Bounds wb = meshes[0].bounds;
+        for (int i = 1; i < meshes.Length; i++)
+            wb.Encapsulate(meshes[i].bounds);
+
+        // Convertir centro a LOCAL space
+        Vector3 localCenter = transform.InverseTransformPoint(wb.center);
+
+        // Escalar el tamaño: dividir por lossyScale para compensar el scale del GO
+        Vector3 ls = transform.lossyScale;
+        Vector3 localSize = new Vector3(
+            wb.size.x / Mathf.Max(0.001f, Mathf.Abs(ls.x)),
+            wb.size.y / Mathf.Max(0.001f, Mathf.Abs(ls.y)),
+            wb.size.z / Mathf.Max(0.001f, Mathf.Abs(ls.z))
+        );
+
+        box.center = localCenter;
+        box.size   = localSize + Vector3.one * margenCollider;
+
+        Debug.Log($"[TaskPoint '{nombreTarea}'] BoxCollider auto-ajustado → size:{box.size}, center:{box.center}");
+    }
+
+    // ─── Visual ───────────────────────────────────────────────────────────────
+
+    private void AplicarTintDisponible()  => AplicarTint(new Color(1f,   0.85f, 0.2f,  1f)); // Dorado
+    private void AplicarTintNoAsignada() => AplicarTint(new Color(0.55f, 0.55f, 0.55f, 1f)); // Gris
+    private void AplicarTintCompletada() => AplicarTint(new Color(0.25f, 0.75f, 0.35f, 1f)); // Verde
+    private void AplicarTintFallada()    => AplicarTint(new Color(0.75f, 0.25f, 0.25f, 1f)); // Rojo
+
+    private void AplicarTint(Color color)
+    {
+        if (renderersPropios == null) return;
+        foreach (var r in renderersPropios)
+        {
+            if (r == null) continue;
+            // Instanciar material en runtime para no modificar el asset original
+            Material mat = r.material;
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
+            else mat.color = color;
+        }
+    }
+
+    // ─── Utils ────────────────────────────────────────────────────────────────
+
+    private string GenerarRutaJerarquica()
+    {
+        string path = gameObject.name;
+        Transform t = transform.parent;
+        while (t != null) { path = t.name + "/" + path; t = t.parent; }
+        return path;
     }
 }

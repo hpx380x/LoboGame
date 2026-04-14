@@ -4,6 +4,8 @@ using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Core.Enums;
+
 
 public enum GamePhase
 {
@@ -52,6 +54,10 @@ public class GameManager : NetworkBehaviour
     [SerializeField] private float tiempoNocheSegundos = 30f;
     [Tooltip("Duración en segundos de la Asamblea de Votación")]
     [SerializeField] private float tiempoVotacionSegundos = 30f;
+    [Header("Sistema de Tareas")]
+    [Tooltip("N\u00famero de tareas que se asignan a cada jugador por d\u00eda.")]
+    [SerializeField] private int tareasPerJugador = 2;
+
     private Dictionary<ulong, int> conteoVotos = new Dictionary<ulong, int>();
     private HashSet<ulong> jugadoresQueVotaron = new HashSet<ulong>();
 
@@ -336,14 +342,24 @@ public class GameManager : NetworkBehaviour
         }
 
         // Verificamos si realmente existe como jugador y si está vivo
+        PlayerState psVotante = null;
+        PlayerStatusEffects statusVotante = null;
         if (NetworkManager.Singleton.ConnectedClients.TryGetValue(votanteId, out var infoCliente))
         {
-            PlayerState ps = infoCliente.PlayerObject.GetComponent<PlayerState>();
-            if (ps == null || ps.isDead.Value) return;
+            psVotante = infoCliente.PlayerObject.GetComponent<PlayerState>();
+            statusVotante = infoCliente.PlayerObject.GetComponent<PlayerStatusEffects>();
+            if (psVotante == null || psVotante.isDead.Value) return;
         }
 
         // Anotamos en la lista oficial que esta persona ya no puede volver a pulsar botones
         jugadoresQueVotaron.Add(votanteId);
+
+        // [Mecánica Sombrero de Tonto] Si el jugador tiene el sombrero, su voto se anula.
+        if (statusVotante != null && statusVotante.isTonto.Value)
+        {
+            Debug.Log($"<color=magenta>[Servidor] El voto de {votanteId} fue anulado silenciosamente porque lleva el Sombrero de Tonto.</color>");
+            return; // No sumar a conteoVotos
+        }
 
         // Si pulso omitir, ulong.MaxValue; en caso contrario, sumamos el voto
         if (candidatoId != ulong.MaxValue)
@@ -372,6 +388,12 @@ public class GameManager : NetworkBehaviour
         }
 
         // --- Manejo del Ratón y Bloqueo de Movimiento ---
+        // [Fix] Aseguramos que el EventSystem y Canvas estén activos al cambiar de fase
+        var es = FindFirstObjectByType<UnityEngine.EventSystems.EventSystem>(FindObjectsInactive.Include);
+        if (es != null) es.gameObject.SetActive(true);
+        
+        var canvasGameplay = FindFirstObjectByType<GameplayUI>(FindObjectsInactive.Include);
+        if (canvasGameplay != null) canvasGameplay.gameObject.SetActive(true);
         if (faseNueva == GamePhase.Votacion)
         {
             Cursor.lockState = CursorLockMode.None;
@@ -379,19 +401,19 @@ public class GameManager : NetworkBehaviour
 
             if (NetworkManager.Singleton.LocalClient != null && NetworkManager.Singleton.LocalClient.PlayerObject != null)
             {
-                MonoBehaviour tpc = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent("ThirdPersonController") as MonoBehaviour;
+                // [Fix] Uso de tipo real para evitar fallos de namespace en GetComponent
+                var tpc = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.ThirdPersonController>();
                 if (tpc != null) tpc.enabled = false;
 
                 // [Fix del Mouse] StarterAssets secuestra el ratón. Tenemos que indicarle a su script de Inputs que lo suelte.
-                MonoBehaviour inputs = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent("StarterAssetsInputs") as MonoBehaviour;
+                var inputs = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.StarterAssetsInputs>();
                 if (inputs != null) 
                 {
-                    // Usamos reflexión simple o campos si están públicos (cursorLocked, cursorInputForLook)
-                    var type = inputs.GetType();
-                    var cursorLockedProp = type.GetField("cursorLocked");
-                    var cursorInputProp = type.GetField("cursorInputForLook");
-                    if (cursorLockedProp != null) cursorLockedProp.SetValue(inputs, false);
-                    if (cursorInputProp != null) cursorInputProp.SetValue(inputs, false);
+                    inputs.cursorLocked = false;
+                    inputs.cursorInputForLook = false;
+                    // Forzamos el desbloqueo físico del cursor para la UI de votación
+                    Cursor.lockState = CursorLockMode.None;
+                    Cursor.visible = true;
                 }
             }
 
@@ -411,24 +433,39 @@ public class GameManager : NetworkBehaviour
                 PlayerState ps = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<PlayerState>();
                 if (ps != null && !ps.isDead.Value)
                 {
-                    MonoBehaviour tpc = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent("ThirdPersonController") as MonoBehaviour;
+                    // [Fix] Uso de tipo real
+                    var tpc = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.ThirdPersonController>();
                     if (tpc != null) tpc.enabled = true;
 
                     // Le devolvemos el secuestro del ratón al StarterAssets
-                    MonoBehaviour inputs = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent("StarterAssetsInputs") as MonoBehaviour;
+                    var inputs = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.StarterAssetsInputs>();
                     if (inputs != null) 
                     {
-                        var type = inputs.GetType();
-                        var cursorLockedProp = type.GetField("cursorLocked");
-                        var cursorInputProp = type.GetField("cursorInputForLook");
-                        if (cursorLockedProp != null) cursorLockedProp.SetValue(inputs, true);
-                        if (cursorInputProp != null) cursorInputProp.SetValue(inputs, true);
+                        inputs.cursorLocked = true;
+                        inputs.cursorInputForLook = true;
                     }
                 }
             }
 
             VotingUI votingUI = FindFirstObjectByType<VotingUI>(FindObjectsInactive.Include);
             if (votingUI != null) votingUI.OcultarPantallaVotacion();
+        }
+
+        // ── Sistema de tareas: al comenzar un nuevo D\u00eda (Noche→Dia), asignar 2 tareas nuevas ──
+        // Solo el servidor tiene autoridad para repartir tareas.
+        if (IsServer && faseAntigua == GamePhase.Noche && faseNueva == GamePhase.Dia)
+        {
+            List<ulong> jugadoresVivos = new List<ulong>();
+            foreach (var client in NetworkManager.Singleton.ConnectedClients)
+            {
+                PlayerState ps = client.Value.PlayerObject?.GetComponent<PlayerState>();
+                if (ps != null && !ps.isDead.Value)
+                {
+                    ps.tareasCompletadasHoy.Value = 0; // Reset contador del d\u00eda
+                    jugadoresVivos.Add(client.Key);
+                }
+            }
+            AsignarTareasATodosLosJugadores(jugadoresVivos);
         }
     }
 
@@ -451,6 +488,21 @@ public class GameManager : NetworkBehaviour
 
         try
         {
+            Debug.Log("[GameManager] Destruyendo clones del Lobby antes del viaje...");
+            
+            // [CORRECCIÓN CRÍTICA] El Prefab 'PlayerArmatureLobby' no contenía el componente PlayerLobbyPose!
+            // Por ello la función FindObjectsByType<PlayerLobbyPose> jamás lo encontraba. Lo buscaremos por nombre.
+            NetworkObject[] todosLosObjetosEnRed = FindObjectsByType<NetworkObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var redObj in todosLosObjetosEnRed)
+            {
+                if (redObj.gameObject.name.Contains("PlayerArmatureLobby"))
+                {
+                    Debug.Log($"[GameManager] Exterminando clon fantasma detectado: {redObj.gameObject.name}");
+                    if (redObj.IsSpawned) redObj.Despawn(true);
+                    else Destroy(redObj.gameObject);
+                }
+            }
+
             Debug.Log("[GameManager] Intentando cargar Scene_Gameplay usando NetworkManager.SceneManager...");
             
             if (NetworkManager.Singleton.SceneManager == null)
@@ -494,11 +546,19 @@ public class GameManager : NetworkBehaviour
 
         int wolfIndex = Random.Range(0, clientIds.Count);
         ulong wolfId = clientIds[wolfIndex];
+
+        // [NUEVO] Elegir un Herrero aleatorio entre los que NO son Lobos
+        List<ulong> noLobos = new List<ulong>(clientIds);
+        noLobos.Remove(wolfId);
+        ulong herreroId = noLobos.Count > 0 ? noLobos[Random.Range(0, noLobos.Count)] : ulong.MaxValue;
+
         SpawnManager spawnManager = FindFirstObjectByType<SpawnManager>();
 
         foreach (ulong clientId in clientIds)
         {
-            string assignedRole = (clientId == wolfId) ? "Lobo" : "Aldeano";
+            RolAldea rolAsignado = (clientId == herreroId) ? RolAldea.Herrero : RolAldea.Ninguno;
+            string assignedRoleText = (clientId == wolfId) ? "Lobo" : "Aldeano";
+            if (rolAsignado != RolAldea.Ninguno) assignedRoleText += $" ({rolAsignado})";
 
             if (playerPrefab != null)
             {
@@ -514,17 +574,14 @@ public class GameManager : NetworkBehaviour
                     netObj.SpawnAsPlayerObject(clientId);
                     Debug.Log($"* Un cuerpo de personaje fue inyectado para el Cliente ID {clientId}");
 
-                    // [V0.3: ADN Autorizado] Le asignamos al PlayerState si este sujeto es Lobo.
                     PlayerState estadoP = playerInstance.GetComponent<PlayerState>();
                     if (estadoP != null)
                     {
-                        if (clientId == wolfId)
-                        {
-                            estadoP.isWolf.Value = true;
-                        }
+                        if (clientId == wolfId) estadoP.isWolf.Value = true;
+                        
+                        // [NUEVO] Asignar el rol de aldea al PlayerState
+                        estadoP.rolAldea.Value = rolAsignado;
 
-                        // Le ordenamos Moverse Forzosamente a Su silla inicial, 
-                        // para que el dueño y todos los demás acaten el punto exacto ignorando cualquier fallo de cámara.
                         ClientRpcParams enviarSoloAlDueño = new ClientRpcParams
                         {
                             Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientId } }
@@ -539,10 +596,16 @@ public class GameManager : NetworkBehaviour
                 Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientId } }
             };
 
-            RecibirRolClientRpc(assignedRole, rpcParams);
+            RecibirRolClientRpc(assignedRoleText, rpcParams);
         }
 
-        // Al terminar de repartir roles, el Servidor empuja el reloj hacia el DÍA número 1
+        // ── Asignamos las Tareas Iniciales (Día 1) ──
+        if (IsServer)
+        {
+            AsignarTareasATodosLosJugadores(clientIds);
+        }
+
+        // Al terminar de repartir roles y tareas, el Servidor empuja el reloj hacia el DÍA número 1
         currentPhase.Value = GamePhase.Dia;
         tiempoRestanteFase = tiempoDiaSegundos;
     }
@@ -634,5 +697,134 @@ public class GameManager : NetworkBehaviour
         // SEGUNDO Inmolamos este script. (Si lo hacemos antes de cargar, 
         // la Corrutina muere y el LoadScene nunca se ejecuta).
         Destroy(gameObject);
+    }
+
+    // ==========================================
+    // SISTEMA DE TAREAS (V1.3)
+    // ==========================================
+
+    [Tooltip("La lista en memoria de todos los TaskPoint de la escena (solo servidor).")]
+    private List<TaskPoint> todosLosTaskPoints = new List<TaskPoint>();
+
+    private void AsignarTareasATodosLosJugadores(List<ulong> jugadoresVivosIds)
+    {
+        if (!IsServer) return;
+
+        // 1. Recolectar o actualizar la lista de todas las tareas del mapa
+        TaskPoint[] puntosFisicos = FindObjectsByType<TaskPoint>(FindObjectsSortMode.None);
+        todosLosTaskPoints = new List<TaskPoint>(puntosFisicos);
+
+        if (todosLosTaskPoints.Count == 0)
+        {
+            Debug.LogWarning("[Server] No se encontraron TaskPoints en la escena. Nadie recibirá tareas.");
+            return;
+        }
+
+        Debug.Log($"[Server] Repartiendo {tareasPerJugador} tareas por jugador (Total disponibles: {todosLosTaskPoints.Count}).");
+
+        foreach (ulong clientId in jugadoresVivosIds)
+        {
+            // Verificación de seguridad
+            if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var clientInfo)) continue;
+            PlayerState ps = clientInfo.PlayerObject?.GetComponent<PlayerState>();
+            if (ps == null || ps.isDead.Value) continue;
+
+            // 2. Barajar la lista de tareas para este jugador específico
+            List<TaskPoint> tareasBarajadas = new List<TaskPoint>(todosLosTaskPoints);
+            // Simple Fisher-Yates shuffle
+            for (int i = tareasBarajadas.Count - 1; i > 0; i--)
+            {
+                int r = Random.Range(0, i + 1);
+                (tareasBarajadas[i], tareasBarajadas[r]) = (tareasBarajadas[r], tareasBarajadas[i]);
+            }
+
+            // 3. Seleccionar las primeras N tareas
+            int cantidadAAsignar = Mathf.Min(tareasPerJugador, tareasBarajadas.Count);
+            List<string> jsonInfos = new List<string>();
+
+            for (int i = 0; i < cantidadAAsignar; i++)
+            {
+                TaskPoint tp = tareasBarajadas[i];
+                TaskInfo info = new TaskInfo(tp.taskId, tp.nombreTarea);
+                jsonInfos.Add(JsonUtility.ToJson(info));
+            }
+
+            // 4. Empaquetar el array y enviárselo secretamente SOLO al dueño
+            string jsonArray = "[" + string.Join(",", jsonInfos) + "]";
+
+            ClientRpcParams parametrosPrivados = new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientId } }
+            };
+
+            RecibirAsignacionTareasClientRpc(jsonArray, ps.isWolf.Value, parametrosPrivados);
+        }
+    }
+
+    [ClientRpc]
+    private void RecibirAsignacionTareasClientRpc(string tareasJsonArray, bool esLobo, ClientRpcParams clientRpcParams = default)
+    {
+        Debug.Log($"<color=cyan>[Red]</color> El servidor me acaba de entregar mis tareas de hoy: {tareasJsonArray}");
+
+        // 1. Deserializar el JSON trampa de Unity (Unity no soporta arrays puros bien usando JsonUtility, necesitamos un wrapper o un truco. Usaremos un parseo basico por simplicidad si se empacó manual)
+        // Para simplificar, asumimos que sabemos parsearlo o usamos un array Wrapper (aquí usaremos un array simple deserializando objeto por objeto).
+        // Como JsonUtility es malo con arrays raiz, parseémoslo cortando strings.
+        
+        // --- PARSEO RUDIMENTARIO ---
+        List<TaskInfo> listaParseada = new List<TaskInfo>();
+        tareasJsonArray = tareasJsonArray.Trim('[', ']'); // "["{...}","{...}"]" => "{...}","{...}"
+        
+        // Separamos por la cadena "," (incluyendo comillas si las hay). Lo más seguro es usar un wrapper real, pero para el prototipo servirá.
+        // Mejor si mandamos el array como strings individuales... pero vamos a solucionarlo usando un struct Wrapper interno.
+        
+        // Hack rapido:
+        string[] objetosJson = tareasJsonArray.Split(new string[] { "},{" }, System.StringSplitOptions.RemoveEmptyEntries);
+        
+        for (int i = 0; i < objetosJson.Length; i++)
+        {
+            string objStr = objetosJson[i];
+            if (!objStr.StartsWith("{")) objStr = "{" + objStr;
+            if (!objStr.EndsWith("}")) objStr = objStr + "}";
+            
+            TaskInfo tInfo = JsonUtility.FromJson<TaskInfo>(objStr);
+            if (tInfo != null && !string.IsNullOrEmpty(tInfo.taskId))
+            {
+                listaParseada.Add(tInfo);
+            }
+        }
+
+        // 2. Avisarle a nuestro HUD
+        GameplayUI gameUI = FindFirstObjectByType<GameplayUI>();
+        if (gameUI != null)
+        {
+            gameUI.ActualizarListaTareas(listaParseada, esLobo);
+        }
+
+        // 3. Avisarle a las "estaciones físicas" (TaskPoints) en la escena
+        // Para que se enciendan/apaguen localmente (Brillo dorado, etc.)
+        TaskPoint[] todosLosPuntosL = FindObjectsByType<TaskPoint>(FindObjectsSortMode.None);
+        foreach (TaskPoint tp in todosLosPuntosL)
+        {
+            bool meTocaAmi = listaParseada.Exists(t => t.taskId == tp.taskId);
+            tp.MarcarComoAsignada(meTocaAmi);
+        }
+    }
+    // ==========================================
+    // SISTEMA DE EXPULSIÓN (KICK)
+    // ==========================================
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    public void KickPlayerServerRpc(ulong clientIdToKick)
+    {
+        // Solo el servidor/Host real tiene permiso para ejecutar la patada
+        if (!IsServer) return;
+
+        // No puedes patearte a ti mismo (el Host)
+        if (clientIdToKick == NetworkManager.Singleton.LocalClientId) return;
+
+        Debug.Log($"<color=red>[SERVIOR] Expulsando al jugador {clientIdToKick} por orden del Host.</color>");
+        
+        // Desconectamos al cliente de la red de Netcode
+        NetworkManager.Singleton.DisconnectClient(clientIdToKick);
     }
 }

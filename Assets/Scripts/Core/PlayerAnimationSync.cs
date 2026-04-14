@@ -35,6 +35,9 @@ public class PlayerAnimationSync : NetworkBehaviour
 
     private void Update()
     {
+        // [NGO Guard] No procesamos red hasta que el objeto esté spawneado y el manager esté activo.
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening || !IsSpawned) return; 
+        
         if (_animator == null) return;
 
         if (IsOwner)
