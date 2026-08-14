@@ -22,11 +22,8 @@ public class LobbyPlayerSpawner : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        // Al arrancar la red, ocultamos TODOS los aldeanos falsos
-        if (IsServer)
-        {
-            DesactivarAldeanosFalsosClientRpc();
-        }
+        // Ocultamos los aldeanos de prueba localmente para cualquier cliente que se conecte
+        OcultarAldeanosPrueba();
 
         if (IsClient)
         {
@@ -40,30 +37,17 @@ public class LobbyPlayerSpawner : NetworkBehaviour
     /// </summary>
     public override void OnNetworkDespawn()
     {
-        ReactivarAldeanosClientRpc();
-    }
-
-    private void OnDestroy()
-    {
-        // Fallback: si el objeto se destruye sin pasar por OnNetworkDespawn
         foreach (var asiento in puntosDeAsiento)
             if (asiento != null) asiento.SetActive(true);
     }
 
-    [ClientRpc]
-    private void DesactivarAldeanosFalsosClientRpc()
+    private void OcultarAldeanosPrueba()
     {
+        // [CLIENT & SERVER] Desactivamos visualmente los aldeanos de prueba
         foreach (var asiento in puntosDeAsiento)
             if (asiento != null) asiento.SetActive(false);
     }
 
-    [ClientRpc]
-    private void ReactivarAldeanosClientRpc()
-    {
-        // [SERVER -> ALL CLIENTS] Reactivamos los aldeanos al cerrar la sesion
-        foreach (var asiento in puntosDeAsiento)
-            if (asiento != null) asiento.SetActive(true);
-    }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void SpawnPersonajeServerRpc(ulong clientId)

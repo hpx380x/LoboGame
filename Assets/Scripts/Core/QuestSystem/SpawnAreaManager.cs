@@ -1,10 +1,11 @@
 using Unity.Netcode;
 using UnityEngine;
 using System.Collections.Generic;
+using Core.Enums;
+using Core.Environment;
 
 /// <summary>
 /// Gestiona el spawn aleatorio de objetos recolectables dentro de un volumen.
-/// Útil para misiones de "Recoger 5 lingotes de la zona de la mina".
 /// </summary>
 public class SpawnAreaManager : NetworkBehaviour
 {
@@ -18,8 +19,9 @@ public class SpawnAreaManager : NetworkBehaviour
     [Tooltip("Tamaño del área (Ancho, Alto, Largo).")]
     public Vector3 areaSize = new Vector3(10, 2, 10);
     
-    [Tooltip("ID que debe coincidir con el QuestData de la misión.")]
-    public string idObjetivoMision = "Lingote";
+    [Header("Identificadores Misión Modular")]
+    public MaterialType materialARecolectar = MaterialType.AceroSierra;
+    public ZoneID zonaSpawn = ZoneID.Aserradero;
 
     private List<NetworkObject> spawnedObjects = new List<NetworkObject>();
 
@@ -27,7 +29,6 @@ public class SpawnAreaManager : NetworkBehaviour
     {
         if (IsServer)
         {
-            // En un futuro esto podría activarse solo cuando alguien tenga la misión activa.
             SpawnObjects();
         }
     }
@@ -66,13 +67,13 @@ public class SpawnAreaManager : NetworkBehaviour
                 QuestInteractable qi = instance.GetComponent<QuestInteractable>();
                 if (qi != null)
                 {
-                    qi.idObjetivoIdentificador = idObjetivoMision;
-                    qi.accionFisica = TipoPasoMision.Recolectar;
+                    qi.materialAsignado = materialARecolectar;
+                    qi.zonaUbicacion = zonaSpawn;
                 }
             }
         }
         
-        Debug.Log($"[Servidor] Aparecieron {cantidadASpawnear} objetos de tipo '{idObjetivoMision}' en {name}");
+        Debug.Log($"[Servidor] Aparecieron {cantidadASpawnear} objetos de tipo '{materialARecolectar}' en {name}");
     }
 
     private void OnDrawGizmosSelected()

@@ -15,14 +15,21 @@ public class PlayerAttack : NetworkBehaviour
     {
         playerState = GetComponent<PlayerState>();
         statusEffects = GetComponent<PlayerStatusEffects>();
-        // Intentamos encontrar al cerebro del juego si hemos caído en la escena principal
-        gameManager = FindFirstObjectByType<GameManager>();
+        gameManager = GameManager.Instance;
     }
 
     private void Update()
     {
         // Regla Dorada de Netcode Local: Tú solo vigilas tus propios botones
         if (!IsOwner) return;
+
+        if (gameManager == null) gameManager = GameManager.Instance;
+
+        // Comprobación de ActionMap habilitado (evita ataques en menús, pergaminos, lobby...)
+        if (TryGetComponent(out PlayerInput playerInput) && playerInput.currentActionMap != null && !playerInput.currentActionMap.enabled)
+        {
+            return;
+        }
 
         // Comprobaciones de Seguridad Local antes de soltar un ataque al vacío:
         // 1. Soy lobo. 2. Estoy vivo. 3. Está la FASE DE LA NOCHE en curso (o tengo el poder del Lobo Albino).
@@ -66,7 +73,7 @@ public class PlayerAttack : NetworkBehaviour
             {
                 // Si encontramos a alguien que no somos nosotros mismos, ¡le damos!
                 tocamosAAlguienVálido = true;
-                Debug.Log($"<color=orange>[Cliente] ¡Alcanzado: {objetivoNet.NetworkObjectId}! Llamando al Servidor...</color>");
+                Debug.Log($"[Cliente] ¡Alcanzado: {objetivoNet.NetworkObjectId}! Llamando al Servidor...");
                 
                 // Pedimos el asesinato
                 MatarJugadorServerRpc(objetivoNet.NetworkObjectId);
@@ -92,6 +99,8 @@ public class PlayerAttack : NetworkBehaviour
             Debug.LogWarning($"[HACK] El jugador {OwnerClientId} solicitó matar, ¡pero no es el Lobo (o está muerto)!");
             return;
         }
+
+        if (gameManager == null) gameManager = GameManager.Instance;
 
         // ¿Realmente es de noche y no usó un truco para congelar el reloj localmente?
         bool esNoche = gameManager != null && gameManager.currentPhase.Value == GamePhase.Noche;
@@ -143,3 +152,4 @@ public class PlayerAttack : NetworkBehaviour
         }
     }
 }
+

@@ -591,7 +591,7 @@ public class HunyuanTextureFixer : EditorWindow
         AddLog("🔎 Escaneando proyecto en busca de modelos sin material o textura...");
         
         // Buscar todos los objetos en la escena con renderers
-        var allRenderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        var allRenderers = FindObjectsByType<Renderer>(FindObjectsInactive.Exclude);
         int count = 0;
 
         foreach (var rend in allRenderers)
@@ -649,3 +649,4 @@ public class HunyuanTextureFixer : EditorWindow
             AddLog($"    ✓ {label}: {tex.name}");
     }
 }
+

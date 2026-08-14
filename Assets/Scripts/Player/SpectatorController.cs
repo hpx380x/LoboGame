@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Netcode;
-using Cinemachine;
+using Unity.Cinemachine;
 using UnityEngine.InputSystem;
 
 /// <summary>
@@ -23,6 +23,7 @@ public class SpectatorController : MonoBehaviour
 
     private CinemachineVirtualCamera _vcam;
     private List<PlayerState> _livingPlayers = new List<PlayerState>();
+    private PlayerState[] _allPlayersCache;
     private int _playerIndex = -1;
     private Vector3 _currentVelocity;
     private Vector2 _lookRotation;
@@ -40,8 +41,8 @@ public class SpectatorController : MonoBehaviour
     {
         Debug.Log("[Espectador] Modo Espectador ACTIVO.");
         
-        _vcam = Object.FindFirstObjectByType<CinemachineVirtualCamera>();
-        _ui = Object.FindFirstObjectByType<GameplayUI>();
+        _vcam = Object.FindAnyObjectByType<CinemachineVirtualCamera>();
+        _ui = Object.FindAnyObjectByType<GameplayUI>();
 
         if (_vcam == null)
         {
@@ -52,6 +53,20 @@ public class SpectatorController : MonoBehaviour
         // Sincronizar rotación inicial con la cámara actual
         _lookRotation = new Vector2(_vcam.transform.eulerAngles.y, _vcam.transform.eulerAngles.x);
         
+        // Cachear jugadores y suscribirse a cambios de estado de muerte
+        _allPlayersCache = Object.FindObjectsByType<PlayerState>(FindObjectsInactive.Exclude);
+        if (_allPlayersCache != null)
+        {
+            foreach (var ps in _allPlayersCache)
+            {
+                if (ps != null && ps.isDead != null)
+                {
+                    ps.isDead.OnValueChanged += OnPlayerDeadChanged;
+                }
+            }
+        }
+        UpdateLivingPlayersList();
+
         // Empezar en modo libre por defecto
         SetFreeCam(true);
         
@@ -61,8 +76,28 @@ public class SpectatorController : MonoBehaviour
 
     private void OnDisable()
     {
+        if (_allPlayersCache != null)
+        {
+            foreach (var ps in _allPlayersCache)
+            {
+                if (ps != null && ps.isDead != null)
+                {
+                    ps.isDead.OnValueChanged -= OnPlayerDeadChanged;
+                }
+            }
+        }
+
         if (_ui != null) _ui.ActualizarEspectador(null, false);
         Debug.Log("[Espectador] Modo Espectador DESACTIVADO.");
+    }
+
+    private void OnPlayerDeadChanged(bool oldValue, bool newValue)
+    {
+        UpdateLivingPlayersList();
+        if (!isFreeCam && currentTarget != null && currentTarget.isDead.Value)
+        {
+            CyclePlayers(1);
+        }
     }
 
     private void Update()
@@ -128,9 +163,9 @@ public class SpectatorController : MonoBehaviour
     private void UpdateLivingPlayersList()
     {
         _livingPlayers.Clear();
-        PlayerState[] allPlayers = Object.FindObjectsByType<PlayerState>(FindObjectsSortMode.None);
+        if (_allPlayersCache == null) return;
         
-        foreach (var ps in allPlayers)
+        foreach (var ps in _allPlayersCache)
         {
             // No nos seguimos a nosotros mismos (estamos muertos) ni a otros muertos
             if (ps != null && ps.isDead != null && !ps.isDead.Value)
@@ -179,3 +214,4 @@ public class SpectatorController : MonoBehaviour
         }
     }
 }
+

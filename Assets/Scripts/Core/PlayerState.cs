@@ -25,6 +25,13 @@ public class PlayerState : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
+    [Header("Refugio Nocturno")]
+    public NetworkVariable<ulong> myHouseId = new NetworkVariable<ulong>(
+        ulong.MaxValue,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+
     [Header("Sistema de Tareas")]
     public NetworkVariable<int> tareasCompletadasHoy = new NetworkVariable<int>(
         0,
@@ -39,6 +46,13 @@ public class PlayerState : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
+    [Header("Identidad y Nombre")]
+    public NetworkVariable<Unity.Collections.FixedString32Bytes> playerName = new NetworkVariable<Unity.Collections.FixedString32Bytes>(
+        "Jugador",
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server
+    );
+
     [Header("Sistema de Huellas")]
     public static System.Collections.Generic.List<GameObject> todasLasHuellas = new System.Collections.Generic.List<GameObject>();
 
@@ -47,6 +61,7 @@ public class PlayerState : NetworkBehaviour
     private Animator animator;
     private SpectatorController _spectatorController;
     private PlayerStatusEffects statusEffects;
+    private ScrollController scrollController;
 
     [Header("Herencia de Oficios")]
     [SerializeField] private RolePrefabMapping[] prefabsOficio;
@@ -65,6 +80,7 @@ public class PlayerState : NetworkBehaviour
         animator = GetComponent<Animator>();
         _spectatorController = GetComponent<SpectatorController>();
         statusEffects = GetComponent<PlayerStatusEffects>(); // Puede existir o no, la lógica vital la usamos como consulta
+        scrollController = GetComponent<ScrollController>();
     }
 
     // Propiedad pública generalizada
@@ -82,18 +98,15 @@ public class PlayerState : NetworkBehaviour
 
         if (isInputLocked)
         {
-            if (TryGetComponent(out StarterAssetsInputs inputs))
-            {
-                inputs.isInputLocked = true;
-                inputs.move = Vector2.zero;
-                inputs.look = Vector2.zero;
-            }
+            if (thirdPersonController != null) thirdPersonController.CanMove = false;
         }
         else
         {
-            if (TryGetComponent(out StarterAssetsInputs inputs))
+            // Solo restaurar si no está leyendo el pergamino
+            bool reading = scrollController != null && scrollController.IsReading;
+            if (!reading)
             {
-                if (inputs.isInputLocked) inputs.isInputLocked = false;
+                if (thirdPersonController != null) thirdPersonController.CanMove = true;
             }
         }
     }
@@ -104,8 +117,8 @@ public class PlayerState : NetworkBehaviour
         
         if (isDead.Value) ApplyDeathPhysics();
 
-        // [LIMPIEZA] Forzar que la animación de "Sentado" esté apagada.
-        // Esto previene que herede el estado del prefab del Lobby al entrar a Gameplay.
+        // [LIMPIEZA] Forzar que la animación de "Sentado" y de "Interacción" estén apagadas.
+        // Esto previene que herede el estado del prefab del Lobby al entrar a Gameplay o inicie bloqueada.
         if (animator != null)
         {
             foreach (var param in animator.parameters)
@@ -113,7 +126,21 @@ public class PlayerState : NetworkBehaviour
                 if (param.name == "isSitting")
                 {
                     animator.SetBool("isSitting", false);
-                    break;
+                }
+                if (param.name == "IsInteracting")
+                {
+                    animator.SetBool("IsInteracting", false);
+                }
+            }
+
+            // [NUEVO/FIX] Forzar que el peso de la capa de sentado (Lobby Layer) sea 0 en gameplay y test scenes
+            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Scene_Menu")
+            {
+                int lobbyLayerIdx = animator.GetLayerIndex("Lobby Layer");
+                if (lobbyLayerIdx != -1)
+                {
+                    animator.SetLayerWeight(lobbyLayerIdx, 0f);
+                    Debug.Log($"[PlayerState] {name}: Peso de la capa 'Lobby Layer' forzado a 0f en OnNetworkSpawn fuera de la escena del Lobby.");
                 }
             }
         }
@@ -197,22 +224,18 @@ public class PlayerState : NetworkBehaviour
     {
         if (IsServer)
         {
-            GameManager gm = FindFirstObjectByType<GameManager>();
+            GameManager gm = FindAnyObjectByType<GameManager>();
             if (gm != null) gm.CheckWinConditions();
         }
 
         if (IsOwner)
         {
-            if (TryGetComponent(out StarterAssetsInputs inputs))
+            if (TryGetComponent(out ThirdPersonController tpc))
             {
-                inputs.isInputLocked = true;
-                inputs.move = Vector2.zero;
-                inputs.look = Vector2.zero;
-                inputs.jump = false;
-                inputs.sprint = false;
+                tpc.CanMove = false;
             }
 
-            GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+            GameplayUI ui = FindAnyObjectByType<GameplayUI>();
             if (ui != null) ui.ToggleScroll(false);
 
             if (_spectatorController != null) _spectatorController.enabled = true;
@@ -236,7 +259,7 @@ public class PlayerState : NetworkBehaviour
     [Rpc(SendTo.Server)] 
     public void EnviarMiVotoServerRpc(ulong candidatoId)
     {
-        GameManager gm = FindFirstObjectByType<GameManager>();
+        GameManager gm = FindAnyObjectByType<GameManager>();
         if (gm != null) gm.RegistrarVotoCentralizado(OwnerClientId, candidatoId);
     }
 
@@ -251,7 +274,7 @@ public class PlayerState : NetworkBehaviour
     {
         Debug.Log($"<color=yellow>🎭 [Ladrón] Ahora eres: {(nuevoRolEsLobo ? "Lobo" : "Aldeano")} 🎭</color>");
         
-        GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+        GameplayUI ui = FindAnyObjectByType<GameplayUI>();
         if (ui != null)
         {
             // Forzar repintado de UI
@@ -274,4 +297,19 @@ public class PlayerState : NetworkBehaviour
         if (characterController != null) characterController.enabled = true;
         if (thirdPersonController != null) thirdPersonController.enabled = true;
     }
+
+    [ClientRpc]
+    public void RepelerJugadorClientRpc(Vector3 fuerzaEmpuje, ClientRpcParams rpcParams = default)
+    {
+        if (characterController != null) characterController.enabled = false;
+        if (thirdPersonController != null) thirdPersonController.enabled = false;
+
+        transform.position += fuerzaEmpuje;
+
+        Physics.SyncTransforms();
+
+        if (characterController != null) characterController.enabled = true;
+        if (thirdPersonController != null) thirdPersonController.enabled = true;
+    }
 }
+

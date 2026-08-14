@@ -12,6 +12,10 @@ public class SpawnManager : NetworkBehaviour
     [Tooltip("Arrastra aquí las sillas/puntos alrededor del objeto central para las reuniones")]
     [SerializeField] private List<Transform> votingSpawnPoints;
 
+    [Header("Centro de Reuniones (Obelisco)")]
+    [Tooltip("El objeto central (Obelisco) donde se reunirán los jugadores")]
+    [SerializeField] private Transform centroObelisco;
+
     // Llevamos la cuenta de qué punto le toca al siguiente jugador
     private int currentSpawnIndex = 0;
     private int currentVotingSpawnIndex = 0;
@@ -23,7 +27,7 @@ public class SpawnManager : NetworkBehaviour
         if (votingSpawnPoints == null || votingSpawnPoints.Count == 0)
         {
             votingSpawnPoints = new List<Transform>();
-            Vector3 centroObelisco = new Vector3(107.305176f, -0.0100001693f, 485.22403f); // Las coordenadas que me pasaste
+            Vector3 centroPos = centroObelisco != null ? centroObelisco.position : new Vector3(107.305176f, -0.0100001693f, 485.22403f);
             
             for(int i = 0; i < 10; i++)
             {
@@ -34,8 +38,8 @@ public class SpawnManager : NetworkBehaviour
                 float angulo = i * (360f / 10f);
                 float radio = 4f; // Separación del centro (4 metros)
                 
-                sillaVirtual.transform.position = centroObelisco + new Vector3(Mathf.Sin(angulo * Mathf.Deg2Rad) * radio, 0, Mathf.Cos(angulo * Mathf.Deg2Rad) * radio);
-                sillaVirtual.transform.LookAt(centroObelisco);
+                sillaVirtual.transform.position = centroPos + new Vector3(Mathf.Sin(angulo * Mathf.Deg2Rad) * radio, 0, Mathf.Cos(angulo * Mathf.Deg2Rad) * radio);
+                sillaVirtual.transform.LookAt(centroPos);
                 
                 votingSpawnPoints.Add(sillaVirtual.transform);
             }

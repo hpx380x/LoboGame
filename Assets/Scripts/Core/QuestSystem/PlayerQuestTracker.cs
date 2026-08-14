@@ -2,250 +2,345 @@ using Unity.Netcode;
 using Unity.Collections;
 using UnityEngine;
 using Core.Enums;
+using System;
 
-public class PlayerQuestTracker : NetworkBehaviour
+namespace Core.QuestSystem
 {
-    [Header("Misión Actual (Server-Auth)")]
-    // Nombre del archivo ScriptableObject dentro de la carpeta Resources/Quests/
-    public NetworkVariable<FixedString32Bytes> misionActivaId = new NetworkVariable<FixedString32Bytes>(
-        "",
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
-
-    public NetworkVariable<int> pasoActualIndex = new NetworkVariable<int>(
-        0,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
-
-    public NetworkVariable<int> progresoPasoActual = new NetworkVariable<int>(
-        0,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
-
-    // [NUEVO] Para la misión colaborativa: Guarda el ID del jugador objetivo al que hay que ayudar
-    public NetworkVariable<ulong> aliadoObjetivoId = new NetworkVariable<ulong>(
-        ulong.MaxValue,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
-
-    // Datos locales para mostrar en UI
-    private QuestData datosLocalesMision;
-
-    public override void OnNetworkSpawn()
+    public class PlayerQuestTracker : NetworkBehaviour
     {
-        base.OnNetworkSpawn();
-        
-        misionActivaId.OnValueChanged += AlCambiarMision;
-        pasoActualIndex.OnValueChanged += AlCambiarPaso;
-        progresoPasoActual.OnValueChanged += AlCambiarProgreso;
+        [Header("Misión Actual (Server-Auth)")]
+        public NetworkVariable<FixedString32Bytes> currentQuestID = new NetworkVariable<FixedString32Bytes>(
+            "",
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
 
-        // Cargar estado inicial si nos unimos tarde
-        if (misionActivaId.Value.ToString() != "")
+        public NetworkVariable<int> currentStepIndex = new NetworkVariable<int>(
+            0,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
+
+        [Header("Misiones Diarias (Max 2)")]
+        public NetworkVariable<int> misionesCompletadasHoy = new NetworkVariable<int>(
+            0,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
+
+        // Registro de misiones completadas hoy para bloquear re-interacción
+        private readonly System.Collections.Generic.List<string> _misionesCompletadas = new System.Collections.Generic.List<string>();
+
+        public bool EstaMisionCompletada(string questID)
         {
-            CargarMisionLocal(misionActivaId.Value.ToString());
+            if (string.IsNullOrEmpty(questID)) return false;
+            return _misionesCompletadas.Contains(questID);
         }
-    }
 
-    public override void OnNetworkDespawn()
-    {
-        misionActivaId.OnValueChanged -= AlCambiarMision;
-        pasoActualIndex.OnValueChanged -= AlCambiarPaso;
-        progresoPasoActual.OnValueChanged -= AlCambiarProgreso;
-        base.OnNetworkDespawn();
-    }
-
-    private void CargarMisionLocal(string questName)
-    {
-        // Se asume que los ScriptableObjects se guardarán en una carpeta llamada Resources/Quests/
-        datosLocalesMision = Resources.Load<QuestData>("Quests/" + questName);
-        ActualizarUILocal();
-    }
-
-    // ==========================================
-    // SECCIÓN SERVIDOR (Lógica de Misión)
-    // ==========================================
-
-    public void AsignarMisionDesdeServidor(string questName)
-    {
-        if (!IsServer) return;
-        misionActivaId.Value = new FixedString32Bytes(questName);
-        pasoActualIndex.Value = 0;
-        progresoPasoActual.Value = 0;
-        
-        // Cargarla también en el servidor para leer sus pasos y ver si requiere aliado
-        QuestData serverQuestData = Resources.Load<QuestData>("Quests/" + questName);
-        if (serverQuestData != null && serverQuestData.pasos.Count > 0)
+        public void ResetDailyQuests()
         {
-            PrepararPasoServidor(serverQuestData.pasos[0]);
-        }
-        
-        Debug.Log($"[Servidor] Misión {questName} asignada al jugador {OwnerClientId}");
-    }
+            if (!IsServer) return;
+            misionesCompletadasHoy.Value = 0;
+            _misionesCompletadas.Clear();
+            ResetDailyQuestsClientRpc();
 
-    private void PrepararPasoServidor(PasoMision paso)
-    {
-        if (paso.tipoPaso == TipoPasoMision.AyudarAldeano)
-        {
-            // Elegir a un jugador aleatorio de la sala que no sea yo
-            ulong aliadoId = ulong.MaxValue;
-            foreach (var client in NetworkManager.Singleton.ConnectedClients)
+            // Resetear el progreso de todos los interactuables de la escena al cambiar de día
+            var interactables = UnityEngine.Object.FindObjectsByType<Core.Environment.UniversalQuestInteractable>(FindObjectsSortMode.None);
+            foreach (var interactable in interactables)
             {
-                if (client.Key != OwnerClientId)
+                if (interactable != null) interactable.ResetearMisionDiaria();
+            }
+        }
+
+        [ClientRpc]
+        private void ResetDailyQuestsClientRpc()
+        {
+            _misionesCompletadas.Clear();
+        }
+
+        [ClientRpc]
+        private void DesbloquearMisionClientRpc(string questID)
+        {
+            if (!string.IsNullOrEmpty(questID))
+            {
+                _misionesCompletadas.Remove(questID);
+            }
+        }
+
+        // Eventos locales para la UI
+        public Action<QuestData> OnQuestUpdated;
+        public Action OnQuestCompleted;
+
+        private QuestData _localQuestData;
+
+        // Máxima distancia permitida para prevenir hacks
+        private const float MAX_INTERACTION_DISTANCE = 4.5f;
+
+        public override void OnNetworkSpawn()
+        {
+            currentQuestID.OnValueChanged += HandleQuestChanged;
+            currentStepIndex.OnValueChanged += HandleStepChanged;
+
+            if (!string.IsNullOrEmpty(currentQuestID.Value.ToString().TrimEnd('\0')))
+            {
+                LoadLocalQuest(currentQuestID.Value.ToString().TrimEnd('\0'));
+            }
+
+            if (IsOwner)
+            {
+                GameplayUI ui = FindAnyObjectByType<GameplayUI>();
+                if (ui != null)
                 {
-                    aliadoId = client.Key;
-                    break; // Tomamos al primero distinto por simplicidad
+                    ui.VincularJugadorLocal(gameObject);
                 }
             }
-            aliadoObjetivoId.Value = aliadoId;
-            Debug.Log($"[Servidor] El jugador {OwnerClientId} debe ir a ayudar al Jugador {aliadoId}");
         }
-        else
+
+        public override void OnNetworkDespawn()
         {
-            aliadoObjetivoId.Value = ulong.MaxValue;
+            currentQuestID.OnValueChanged -= HandleQuestChanged;
+            currentStepIndex.OnValueChanged -= HandleStepChanged;
         }
-    }
 
-    // ──────────────────────────────────────────
-    // RECIBIDORES (Llamados desde Interacciones)
-    // ──────────────────────────────────────────
-
-    [Rpc(SendTo.Server)]
-    public void IntentarAvanzarMisionServerRpc(TipoPasoMision accionFisica, string idObjetivoIdentificador)
-    {
-        if (string.IsNullOrEmpty(misionActivaId.Value.ToString())) return;
-
-        QuestData qData = Resources.Load<QuestData>("Quests/" + misionActivaId.Value.ToString());
-        if (qData == null || pasoActualIndex.Value >= qData.pasos.Count) return;
-
-        PasoMision pasoValido = qData.pasos[pasoActualIndex.Value];
-
-        // 1. ¿El tipo de acción o recolección coincide con lo que pide el paso?
-        if (pasoValido.tipoPaso != accionFisica) return;
-        
-        // 2. ¿El ID del objeto al que le diste a [E] coincide con lo que se pide? 
-        // Ej: recogiste "Manzana" y el paso pedía "Manzana".
-        if (pasoValido.idObjetivo != idObjetivoIdentificador) return;
-
-        // 3. ¡Es válido! Sumamos progreso.
-        progresoPasoActual.Value++;
-        Debug.Log($"[Servidor] Jugador {OwnerClientId} avanzó misión. Progreso: {progresoPasoActual.Value}/{pasoValido.cantidadRequerida}");
-
-        // ¿Pasamos al siguiente nivel?
-        if (progresoPasoActual.Value >= pasoValido.cantidadRequerida)
+        private void HandleQuestChanged(FixedString32Bytes previous, FixedString32Bytes current)
         {
-            pasoActualIndex.Value++;
-            progresoPasoActual.Value = 0;
+            LoadLocalQuest(current.ToString().TrimEnd('\0'));
+        }
 
-            if (pasoActualIndex.Value >= qData.pasos.Count)
+        private void HandleStepChanged(int previous, int current)
+        {
+            if (_localQuestData != null)
             {
-                CompletarMisionExitosamente(qData);
-            }
-            else
-            {
-                // Preparamos el siguiente paso (por si toca asignar compañero co-op)
-                PrepararPasoServidor(qData.pasos[pasoActualIndex.Value]);
+                OnQuestUpdated?.Invoke(_localQuestData);
             }
         }
-    }
 
-    // [NUEVO] MECÁNICA COOPERATIVA: Ayudar a un Aliado manteniendo [E] cerca de él
-    [Rpc(SendTo.Server)]
-    public void IntentarAyudarAliadoServerRpc()
-    {
-        if (string.IsNullOrEmpty(misionActivaId.Value.ToString())) return;
-
-        QuestData qData = Resources.Load<QuestData>("Quests/" + misionActivaId.Value.ToString());
-        if (qData == null || pasoActualIndex.Value >= qData.pasos.Count) return;
-
-        PasoMision pasoValido = qData.pasos[pasoActualIndex.Value];
-
-        if (pasoValido.tipoPaso == TipoPasoMision.AyudarAldeano && aliadoObjetivoId.Value != ulong.MaxValue)
+        private void LoadLocalQuest(string questID)
         {
-            // Verificar Distancia Física usando red
-            if (NetworkManager.Singleton.ConnectedClients.TryGetValue(aliadoObjetivoId.Value, out var aliadoClient))
+            if (string.IsNullOrEmpty(questID))
             {
-                float distancia = Vector3.Distance(transform.position, aliadoClient.PlayerObject.transform.position);
-                if (distancia <= 3.0f) // Radio de 3 metros
+                _localQuestData = null;
+                OnQuestUpdated?.Invoke(null);
+                return;
+            }
+
+            _localQuestData = QuestManager.Instance?.GetQuestByID(questID);
+            OnQuestUpdated?.Invoke(_localQuestData);
+        }
+
+        /// <summary>
+        /// Fuerza a re-emitir el estado actual de la misión hacia la UI local.
+        /// Útil cuando la UI se suscribe DESPUÉS de que el evento ya ocurrió.
+        /// </summary>
+        public void ForzarActualizacionUI()
+        {
+            string questActual = currentQuestID.Value.ToString().TrimEnd('\0');
+            _localQuestData = string.IsNullOrEmpty(questActual)
+                ? null
+                : QuestManager.Instance?.GetQuestByID(questActual);
+            OnQuestUpdated?.Invoke(_localQuestData);
+        }
+
+        // -------------------------------------------------------------
+        // LOGICA DEL SERVIDOR (SERVER-AUTHORITATIVE)
+        // -------------------------------------------------------------
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+        public void AcceptQuestServerRpc(FixedString32Bytes newQuestID)
+        {
+            if (!IsServer) return;
+
+            string qid = newQuestID.ToString();
+            QuestData requestedQuest = QuestManager.Instance.GetQuestByID(qid);
+            if (requestedQuest != null)
+            {
+                currentQuestID.Value = newQuestID;
+                currentStepIndex.Value = 0;
+
+                // Si la misión estaba marcada como completada anteriormente, la removemos para permitir re-hacerla
+                _misionesCompletadas.Remove(qid);
+                DesbloquearMisionClientRpc(qid);
+
+                // Resetear el progreso de los objetos de esta misión en la escena
+                ResetearInteractuablesDeMision(requestedQuest);
+
+                Debug.Log($"[Server] Jugador {OwnerClientId} aceptó la misión {newQuestID}");
+            }
+        }
+
+        public void ServerAssignQuest(string newQuestID)
+        {
+            if (!IsServer) return;
+            QuestData requestedQuest = QuestManager.Instance.GetQuestByID(newQuestID);
+            if (requestedQuest != null)
+            {
+                currentQuestID.Value = newQuestID;
+                currentStepIndex.Value = 0;
+
+                // Si la misión estaba marcada como completada anteriormente, la removemos para permitir re-hacerla
+                _misionesCompletadas.Remove(newQuestID);
+                DesbloquearMisionClientRpc(newQuestID);
+
+                // Resetear el progreso de los objetos de esta misión en la escena
+                ResetearInteractuablesDeMision(requestedQuest);
+
+                Debug.Log($"[Server] Servidor forzó asignación de misión {newQuestID} al jugador {OwnerClientId}");
+                
+                if (IsOwner)
                 {
-                    // Lógica para decir que se mantuvo el botón con éxito (simplificado a sumarle todo el progreso)
-                    progresoPasoActual.Value = pasoValido.cantidadRequerida; // Instantáneo para el prototipo
-                    pasoActualIndex.Value++;
-                    progresoPasoActual.Value = 0;
+                    LoadLocalQuest(newQuestID);
+                }
+            }
+        }
 
-                    if (pasoActualIndex.Value >= qData.pasos.Count)
+        private void ResetearInteractuablesDeMision(QuestData qData)
+        {
+            if (qData == null || qData.pasos == null || qData.pasos.Count == 0) return;
+            var interactables = UnityEngine.Object.FindObjectsByType<Core.Environment.UniversalQuestInteractable>(FindObjectsSortMode.None);
+            foreach (var uqi in interactables)
+            {
+                if (uqi == null) continue;
+
+                bool esTarget = uqi.questData?.questID == qData.questID;
+                if (!esTarget)
+                {
+                    foreach (var step in qData.pasos)
                     {
-                        CompletarMisionExitosamente(qData);
+                        if (QuestValidator.PasoCoincide(step, uqi.materialAsignado, uqi.zonaUbicacion, uqi.materialRequeridoParaEntrega))
+                        {
+                            esTarget = true;
+                            break;
+                        }
                     }
-                    else
-                    {
-                        PrepararPasoServidor(qData.pasos[pasoActualIndex.Value]);
-                    }
+                }
+
+                if (esTarget)
+                {
+                    uqi.ResetearMisionDiaria();
+                }
+            }
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+        public void AbandonQuestServerRpc()
+        {
+            if (!IsServer) return;
+            currentQuestID.Value = "";
+            currentStepIndex.Value = 0;
+            Debug.Log($"[Server] Jugador {OwnerClientId} abandonó su misión.");
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+        public void ProcessStepServerRpc(MaterialType interactedMaterial, ZoneID interactionZone, Vector3 interactionPos)
+        {
+            if (!IsServer) return;
+
+            // 1. Validar Anti-Hack de Distancia
+            float distance = Vector3.Distance(transform.position, interactionPos);
+            if (distance > MAX_INTERACTION_DISTANCE)
+            {
+                Debug.LogWarning($"[Server Anti-Cheat] Jugador {OwnerClientId} intentó interactuar desde muy lejos ({distance}m).");
+                return;
+            }
+
+            // 2. Validar que tenga una misión activa
+            if (string.IsNullOrEmpty(currentQuestID.Value.ToString())) return;
+
+            QuestData qData = QuestManager.Instance.GetQuestByID(currentQuestID.Value.ToString());
+            if (qData == null) return;
+
+            // 3. Validar si ya ha terminado
+            if (currentStepIndex.Value >= qData.pasos.Count) return;
+
+            QuestStep currentStep = qData.pasos[currentStepIndex.Value];
+
+            if ((currentStep.materialRequerido == interactedMaterial ||
+                 currentStep.materialRequerido == MaterialType.Cualquiera ||
+                 interactedMaterial == MaterialType.Cualquiera) &&
+                currentStep.zonaRequerida == interactionZone)
+            {
+                // Paso Correcto
+                currentStepIndex.Value++;
+                Debug.Log($"[Server] Jugador {OwnerClientId} completó el paso {currentStepIndex.Value} de {qData.questID}.");
+
+                // Comprobar si completó toda la misión
+                if (currentStepIndex.Value >= qData.pasos.Count)
+                {
+                    CompleteQuestOnServer(qData);
+                }
+            }
+        }
+
+        private void CompleteQuestOnServer(QuestData qData)
+        {
+            Debug.Log($"[Server] Jugador {OwnerClientId} COMPLETÓ LA MISIÓN: {qData.nombreMision}");
+            
+            PlayerInventory inventory = GetComponent<PlayerInventory>();
+            if (inventory != null)
+            {
+                // 1. Otorgar Oro si tiene
+                if (qData.oroRecompensa > 0)
+                {
+                    inventory.monedas.Value += qData.oroRecompensa;
+                    Debug.Log($"[Server] Otorgando {qData.oroRecompensa} de oro al jugador {OwnerClientId}");
+                }
+
+                // 2. Otorgar Objeto Físico si tiene
+                if (qData.objetoRecompensa != null && qData.objetoRecompensa.objetoAsociado != TipoObjeto.Ninguno)
+                {
+                    inventory.objetoEnMano.Value = qData.objetoRecompensa.objetoAsociado;
+                    Debug.Log($"[Server] Otorgando objeto {qData.objetoRecompensa.objetoAsociado} al jugador {OwnerClientId}");
+                }
+            }
+
+            // Registrar la ID de la misión como completada para bloquear accesos repetidos
+            if (qData != null && !_misionesCompletadas.Contains(qData.questID))
+            {
+                _misionesCompletadas.Add(qData.questID);
+                RegistrarMisionCompletadaClientRpc(qData.questID);
+            }
+
+            // Incrementar contador de misiones del día
+            misionesCompletadasHoy.Value++;
+            
+            NotifyQuestCompletionClientRpc();
+
+            if (misionesCompletadasHoy.Value < 2)
+            {
+                // Asignar inmediatamente la segunda misión
+                string nextQuestId = GameManager.Instance != null ? GameManager.Instance.GetRandomBasicQuestID(qData.questID) : "";
+                if (!string.IsNullOrEmpty(nextQuestId))
+                {
+                    ServerAssignQuest(nextQuestId);
+                    Debug.Log($"[Server] Segunda misión asignada al jugador {OwnerClientId}: {nextQuestId}");
                 }
                 else
                 {
-                    Debug.Log($"[Servidor] Jugador {OwnerClientId} intentó ayudar, pero estaba demasiado lejos ({distancia}m).");
+                    currentQuestID.Value = "";
+                    currentStepIndex.Value = 0;
                 }
             }
-        }
-    }
-
-    private void CompletarMisionExitosamente(QuestData qData)
-    {
-        Debug.Log($"[Servidor] ¡Jugador {OwnerClientId} ha COMPLETAOD la misión '{qData.nombreMision}'!");
-
-        PlayerInventory inv = GetComponent<PlayerInventory>();
-        if (inv != null)
-        {
-            if (qData.monedasRecompensaFinal > 0)
-                inv.monedas.Value += qData.monedasRecompensaFinal;
-
-            if (qData.objetoRecompensaFinal != TipoObjeto.Ninguno)
-                inv.objetoEnMano.Value = qData.objetoRecompensaFinal;
-        }
-
-        // Limpiar
-        misionActivaId.Value = "";
-        pasoActualIndex.Value = 0;
-        progresoPasoActual.Value = 0;
-        aliadoObjetivoId.Value = ulong.MaxValue;
-        datosLocalesMision = null;
-    }
-
-    // ==========================================
-    // SECCIÓN CLIENTE (UI y Respuestas)
-    // ==========================================
-
-    private void AlCambiarMision(FixedString32Bytes viejo, FixedString32Bytes nuevo)
-    {
-        if (nuevo.ToString() != "") CargarMisionLocal(nuevo.ToString());
-        else { datosLocalesMision = null; ActualizarUILocal(); }
-    }
-
-    private void AlCambiarPaso(int viejo, int nuevo) => ActualizarUILocal();
-    private void AlCambiarProgreso(int viejo, int nuevo) => ActualizarUILocal();
-
-    private void ActualizarUILocal()
-    {
-        if (!IsOwner) return;
-
-        GameplayUI ui = FindFirstObjectByType<GameplayUI>();
-        if (ui == null) return;
-
-        if (datosLocalesMision != null && pasoActualIndex.Value < datosLocalesMision.pasos.Count)
-        {
-            PasoMision pasoDeAhora = datosLocalesMision.pasos[pasoActualIndex.Value];
-            
-            string textoExtra = "";
-            if (pasoDeAhora.tipoPaso == TipoPasoMision.AyudarAldeano)
+            else
             {
-                textoExtra = $" <color=yellow>(Ve al Jugador {aliadoObjetivoId.Value})</color>";
+                // Reseteamos el estado de la misión
+                currentQuestID.Value = "";
+                currentStepIndex.Value = 0;
             }
+        }
 
-            ui.MostrarMensajeTarea($"Misión: {datosLocalesMision.nombreMision}\n➔ {pasoDeAhora.descripcionPaso}{textoExtra} ({progresoPasoActual.Value}/{pasoDeAhora.cantidadRequerida})", 3f);
+        [ClientRpc]
+        private void RegistrarMisionCompletadaClientRpc(string questID)
+        {
+            if (!string.IsNullOrEmpty(questID) && !_misionesCompletadas.Contains(questID))
+            {
+                _misionesCompletadas.Add(questID);
+            }
+        }
+
+        [ClientRpc]
+        private void NotifyQuestCompletionClientRpc()
+        {
+            OnQuestCompleted?.Invoke();
         }
     }
 }

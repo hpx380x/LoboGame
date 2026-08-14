@@ -5,6 +5,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Core.Enums;
+using Core.Environment;
 
 
 public enum GamePhase
@@ -55,8 +56,65 @@ public class GameManager : NetworkBehaviour
     [Tooltip("Duración en segundos de la Asamblea de Votación")]
     [SerializeField] private float tiempoVotacionSegundos = 30f;
     [Header("Sistema de Tareas")]
-    [Tooltip("N\u00famero de tareas que se asignan a cada jugador por d\u00eda.")]
-    [SerializeField] private int tareasPerJugador = 2;
+    // [Tooltip("Número de tareas que se asignan a cada jugador por día.")]
+    // [SerializeField] private int tareasPerJugador = 2; // (No se usa actualmente)
+
+    [Header("DEBUG - Testing de Misiones")]
+    [Tooltip("Arrastra aquí el asset QuestData para probarlo directamente")]
+    [SerializeField] private Core.QuestSystem.QuestData debugQuestAsset;
+    [Tooltip("Escribe aquí el questID exacto que quieres probar (se ignora si usas debugQuestAsset arriba)")]
+    public string debugQuestID = "mision_manzana_oro";
+    [Tooltip("El ID del cliente en red (0 suele ser el Host)")]
+    public ulong debugTargetPlayerID = 0;
+
+    [ContextMenu("Debug: Asignar Quest al Jugador")]
+    public void DebugForceAssignQuest()
+    {
+        if (!IsServer)
+        {
+            Debug.LogWarning("[GameManager Debug] Solo el servidor/host puede asignar misiones de test.");
+            return;
+        }
+
+        string questIDParaAsignar = debugQuestAsset != null ? debugQuestAsset.questID : debugQuestID;
+
+        if (NetworkManager.Singleton.ConnectedClients.TryGetValue(debugTargetPlayerID, out var clientInfo))
+        {
+            if (clientInfo.PlayerObject != null)
+            {
+                var tracker = clientInfo.PlayerObject.GetComponent<Core.QuestSystem.PlayerQuestTracker>();
+                if (tracker != null)
+                {
+                    tracker.ServerAssignQuest(questIDParaAsignar);
+                }
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"[GameManager Debug] No se encontró al jugador con ID {debugTargetPlayerID} en la sala.");
+        }
+    }
+
+    [ContextMenu("Debug: Asignar Quest a TODOS")]
+    public void DebugForceAssignQuestToAll()
+    {
+        if (!IsServer) return;
+
+        string questIDParaAsignar = debugQuestAsset != null ? debugQuestAsset.questID : debugQuestID;
+
+        foreach (var clientInfo in NetworkManager.Singleton.ConnectedClients.Values)
+        {
+            if (clientInfo.PlayerObject != null)
+            {
+                var tracker = clientInfo.PlayerObject.GetComponent<Core.QuestSystem.PlayerQuestTracker>();
+                if (tracker != null)
+                {
+                    tracker.ServerAssignQuest(questIDParaAsignar);
+                }
+            }
+        }
+        Debug.Log($"[GameManager Debug] Misión '{questIDParaAsignar}' forzada a TODOS los jugadores de la sala.");
+    }
 
     private Dictionary<ulong, int> conteoVotos = new Dictionary<ulong, int>();
     private HashSet<ulong> jugadoresQueVotaron = new HashSet<ulong>();
@@ -64,9 +122,80 @@ public class GameManager : NetworkBehaviour
     private bool isStarting = false;
     private bool esPrimerDia = true;
     private bool partidaTerminada = false;
+    private int muertesAlInicioDeLaNoche = 0;
+
+    // Cache de objetos de la escena para evitar FindAnyObjectByType recurrentes
+    private GameplayUI cachedGameplayUI = null;
+    private Light cachedDirectionalLight = null;
+    private Color colorDiaOriginal = Color.white;
+    private bool colorOriginalObtenido = false;
+    private UnityEngine.EventSystems.EventSystem cachedEventSystem = null;
+    private VotingUI cachedVotingUI = null;
+
+    private GameplayUI GetGameplayUI()
+    {
+        if (cachedGameplayUI == null) cachedGameplayUI = Object.FindAnyObjectByType<GameplayUI>(FindObjectsInactive.Include);
+        return cachedGameplayUI;
+    }
+
+    private Light GetDirectionalLight()
+    {
+        if (cachedDirectionalLight == null)
+        {
+            Light[] lights = Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude);
+            foreach (var l in lights)
+            {
+                if (l.type == LightType.Directional)
+                {
+                    cachedDirectionalLight = l;
+                    break;
+                }
+            }
+        }
+        return cachedDirectionalLight;
+    }
+
+    private UnityEngine.EventSystems.EventSystem GetEventSystem()
+    {
+        if (cachedEventSystem == null) cachedEventSystem = Object.FindAnyObjectByType<UnityEngine.EventSystems.EventSystem>(FindObjectsInactive.Include);
+        return cachedEventSystem;
+    }
+
+    private VotingUI GetVotingUI()
+    {
+        if (cachedVotingUI == null) cachedVotingUI = Object.FindAnyObjectByType<VotingUI>(FindObjectsInactive.Include);
+        return cachedVotingUI;
+    }
+
+    private void OnEnable()
+    {
+        SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        cachedGameplayUI = null;
+        cachedDirectionalLight = null;
+        cachedEventSystem = null;
+        cachedVotingUI = null;
+    }
+
+    public static GameManager Instance { get; private set; }
 
     private void Awake()
     {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+
         // [Regla Especial] Hacemos que la "nave" del GameManager sea indestructible
         // para que sobreviva al agujero negro del cambio de escena y llegue a la Tierra (Scene_Gameplay)
         NetworkObject netObj = GetComponent<NetworkObject>();
@@ -75,6 +204,15 @@ public class GameManager : NetworkBehaviour
             netObj.DestroyWithScene = false;
         }
         DontDestroyOnLoad(this.gameObject);
+    }
+
+    public override void OnDestroy()
+    {
+        base.OnDestroy();
+        if (Instance == this)
+        {
+            Instance = null;
+        }
     }
 
     public override void OnNetworkSpawn()
@@ -175,68 +313,147 @@ public class GameManager : NetworkBehaviour
         }
     }
 
+    private Dictionary<ulong, string> clientNicknames = new Dictionary<ulong, string>();
+
+    public void RegistrarNicknameCliente(ulong clientId, string nickname)
+    {
+        if (!IsServer) return;
+        clientNicknames[clientId] = nickname;
+        // Forzar actualización inmediata de la lista
+        ActualizarListaJugadoresServidor(clientId);
+    }
+
+    public string ObtenerNicknameCliente(ulong clientId)
+    {
+        if (clientNicknames.TryGetValue(clientId, out string nickname))
+        {
+            return nickname;
+        }
+        return $"Jugador {clientId}";
+    }
+
     private void ActualizarListaJugadoresServidor(ulong clientId)
     {
         // Regla 3: Guard de Servidor
         if (!IsServer) return;
         
-        string nuevaLista = "";
+        // Limpiar nicknames de clientes desconectados
+        List<ulong> aEliminar = new List<ulong>();
+        foreach (var key in clientNicknames.Keys)
+        {
+            if (!NetworkManager.Singleton.ConnectedClients.ContainsKey(key))
+            {
+                aEliminar.Add(key);
+            }
+        }
+        foreach (var id in aEliminar)
+        {
+            clientNicknames.Remove(id);
+        }
+
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
         int conteo = 0;
         
         foreach (var id in NetworkManager.Singleton.ConnectedClientsIds)
         {
             conteo++;
+            string nickname = ObtenerNicknameCliente(id);
             if (id == NetworkManager.Singleton.LocalClientId)
             {
-                nuevaLista += $"- Jugador {id} (HOST)\n";
+                sb.Append($"- {nickname} (HOST)\n");
             }
             else
             {
-                nuevaLista += $"- Jugador {id}\n";
+                sb.Append($"- {nickname}\n");
             }
         }
         
         string cabecera = $"<color=yellow>JUGADORES EN LA SALA ({conteo}/10):</color>\n\n";
-        listaJugadoresNetwork.Value = new FixedString4096Bytes(cabecera + nuevaLista);
+        listaJugadoresNetwork.Value = new FixedString4096Bytes(cabecera + sb.ToString());
     }
 
-    private void Update()
+
+    private Coroutine serverPhaseTimer;
+
+    private IEnumerator RutinaRelojFase(float duration, GamePhase nextPhase, System.Action onPhaseEnd)
     {
-        // El reloj de la partida SOLO existe físicamente en el ordenador del Servidor
-        if (!IsServer || partidaTerminada) return;
+        yield return new WaitForSeconds(duration);
+        if (partidaTerminada) yield break;
+        
+        onPhaseEnd?.Invoke();
+        currentPhase.Value = nextPhase;
+    }
 
-        if (currentPhase.Value == GamePhase.Dia || currentPhase.Value == GamePhase.Noche || currentPhase.Value == GamePhase.Votacion)
+    private int ContarJugadoresMuertos()
+    {
+        int count = 0;
+        foreach (var client in NetworkManager.Singleton.ConnectedClients)
         {
-            tiempoRestanteFase -= Time.deltaTime;
+            if (client.Value.PlayerObject == null) continue;
+            PlayerState ps = client.Value.PlayerObject.GetComponent<PlayerState>();
+            if (ps != null && ps.isDead.Value) count++;
+        }
+        return count;
+    }
 
-            if (tiempoRestanteFase <= 0f)
+    private void EvaluarAmanecer()
+    {
+        if (!IsServer) return;
+
+        int muertosActuales = ContarJugadoresMuertos();
+        bool huboMuertosEstaNoche = muertosActuales > muertesAlInicioDeLaNoche;
+
+        // Abrir todas las puertas de las casas obligatoriamente
+        HouseController[] casas = FindObjectsByType<HouseController>(FindObjectsInactive.Exclude);
+        foreach (var casa in casas)
+        {
+            casa.IsDoorLocked.Value = false;
+        }
+
+        // Optimización O(N + M): Crear diccionario indexado por NetworkObjectId
+        Dictionary<ulong, HouseController> casasDict = new Dictionary<ulong, HouseController>();
+        foreach (var casa in casas)
+        {
+            casasDict[casa.NetworkObjectId] = casa;
+        }
+
+        if (huboMuertosEstaNoche)
+        {
+            Debug.Log("[Servidor] Hubo sangre esta noche. Invocando a todos a la plaza central para asamblea.");
+            SpawnManager spawnManager = FindAnyObjectByType<SpawnManager>();
+            
+            foreach (var clientInfo in NetworkManager.Singleton.ConnectedClients)
             {
-                if (currentPhase.Value == GamePhase.Dia)
+                if (clientInfo.Value.PlayerObject == null) continue;
+                PlayerState ps = clientInfo.Value.PlayerObject.GetComponent<PlayerState>();
+                if (ps != null && !ps.isDead.Value)
                 {
-                    if (esPrimerDia)
+                    Transform spawnDestino = spawnManager != null ? spawnManager.GetNextVotingSpawnPoint() : null;
+                    if (spawnDestino != null)
                     {
-                        Debug.Log("[Servidor] Fin del Primer Día. No hay votación hoy, cae la Noche directa.");
-                        esPrimerDia = false; // Quitamos el candado para los días futuros
-                        currentPhase.Value = GamePhase.Noche;
-                        tiempoRestanteFase = tiempoNocheSegundos;
-                    }
-                    else
-                    {
-                        currentPhase.Value = GamePhase.Votacion;
-                        tiempoRestanteFase = tiempoVotacionSegundos;
-                        PrepararVotacion();
+                        ClientRpcParams rpcParams = new ClientRpcParams { Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientInfo.Value.ClientId } } };
+                        ps.ForzarTeletransporteClientRpc(spawnDestino.position, spawnDestino.rotation, rpcParams);
                     }
                 }
-                else if (currentPhase.Value == GamePhase.Votacion)
+            }
+        }
+        else
+        {
+            Debug.Log("[Servidor] Noche pacífica. Los jugadores amanecen en sus camas.");
+            foreach (var clientInfo in NetworkManager.Singleton.ConnectedClients)
+            {
+                if (clientInfo.Value.PlayerObject == null) continue;
+                PlayerState ps = clientInfo.Value.PlayerObject.GetComponent<PlayerState>();
+                if (ps != null && !ps.isDead.Value)
                 {
-                    ResolverVotacion();
-                    currentPhase.Value = GamePhase.Noche;
-                    tiempoRestanteFase = tiempoNocheSegundos;
-                }
-                else if (currentPhase.Value == GamePhase.Noche)
-                {
-                    currentPhase.Value = GamePhase.Dia;
-                    tiempoRestanteFase = tiempoDiaSegundos;
+                    if (casasDict.TryGetValue(ps.myHouseId.Value, out HouseController miCasa))
+                    {
+                        if (miCasa.bedSpawnPoint != null)
+                        {
+                            ClientRpcParams rpcParams = new ClientRpcParams { Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientInfo.Value.ClientId } } };
+                            ps.ForzarTeletransporteClientRpc(miCasa.bedSpawnPoint.position, miCasa.bedSpawnPoint.rotation, rpcParams);
+                        }
+                    }
                 }
             }
         }
@@ -248,7 +465,7 @@ public class GameManager : NetworkBehaviour
         conteoVotos.Clear();
         jugadoresQueVotaron.Clear();
 
-        SpawnManager spawnManager = FindFirstObjectByType<SpawnManager>();
+        SpawnManager spawnManager = FindAnyObjectByType<SpawnManager>();
 
         foreach (var clientInfo in NetworkManager.Singleton.ConnectedClients)
         {
@@ -258,21 +475,7 @@ public class GameManager : NetworkBehaviour
                 PlayerState ps = netObj.GetComponent<PlayerState>();
                 if (ps != null && !ps.isDead.Value)
                 {
-                    // Usamos la nueva función circular de puntos de reunión
-                    Transform spawnDestino = spawnManager != null ? spawnManager.GetNextVotingSpawnPoint() : null;
-                    if (spawnDestino != null)
-                    {
-                        // [CRÍTICO] Ya no empujamos el transform desde el servidor, porque su computadora local 
-                        // nos negaría el movimiento la mayoría de veces debido a los pre-cálculos del motor físico.
-                        // En su lugar, le emitimos una ORDEN MILITAR para que su propia computadora haga el viaje voluntariamente:
-                        
-                        ClientRpcParams enviarSoloAlDueño = new ClientRpcParams
-                        {
-                            Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientInfo.Value.ClientId } }
-                        };
-                        
-                        ps.ForzarTeletransporteClientRpc(spawnDestino.position, spawnDestino.rotation, enviarSoloAlDueño);
-                    }
+                    // Notificamos al jugador que debe ir a votar, pero no lo forzamos.
                 }
             }
         }
@@ -282,8 +485,27 @@ public class GameManager : NetworkBehaviour
     {
         Debug.Log("[Servidor] Tiempo agotado. Resolviendo votación...");
         
+        // Forzar voto nulo (ulong.MaxValue) para los vivos que no votaron
+        foreach (var clientInfo in NetworkManager.Singleton.ConnectedClients)
+        {
+            if (clientInfo.Value.PlayerObject != null)
+            {
+                PlayerState ps = clientInfo.Value.PlayerObject.GetComponent<PlayerState>();
+                if (ps != null && !ps.isDead.Value)
+                {
+                    if (!jugadoresQueVotaron.Contains(clientInfo.Key))
+                    {
+                        if (conteoVotos.ContainsKey(ulong.MaxValue))
+                            conteoVotos[ulong.MaxValue]++;
+                        else
+                            conteoVotos[ulong.MaxValue] = 1;
+                    }
+                }
+            }
+        }
+
         // Si nadie voto absolutamente por nadie, continuamos
-        if (conteoVotos.Count == 0)
+        if (conteoVotos.Count == 0 || (conteoVotos.Count == 1 && conteoVotos.ContainsKey(ulong.MaxValue)))
         {
             Debug.Log("[Servidor] Nadie recibió votos. La partida continúa normalmente.");
             return;
@@ -370,55 +592,95 @@ public class GameManager : NetworkBehaviour
         }
         else
         {
-            Debug.Log($"[Servidor] Jugador {votanteId} emitió una omisión de voto (Skip).");
+            Debug.Log($"[Servidor] Jugador {votanteId} emitió una omisión.");
         }
     }
 
     private void AlCambiarDeFase(GamePhase faseAntigua, GamePhase faseNueva)
     {
-        GameplayUI gameUI = FindFirstObjectByType<GameplayUI>();
+        // 1. Lógica del Cliente (UI, Luces, Inputs, Votación)
+        AlCambiarDeFase_Cliente(faseAntigua, faseNueva);
+
+        // 2. Lógica del Servidor (Timers, Asignación de misiones)
+        if (IsServer)
+        {
+            AlCambiarDeFase_Servidor(faseAntigua, faseNueva);
+        }
+    }
+
+    private void AlCambiarDeFase_Cliente(GamePhase faseAntigua, GamePhase faseNueva)
+    {
+        GameplayUI gameUI = GetGameplayUI();
         if (gameUI != null) gameUI.ActualizarFase(faseNueva.ToString());
 
-        Light sol = FindFirstObjectByType<Light>();
+        Light sol = GetDirectionalLight();
         if (sol != null && sol.type == LightType.Directional)
         {
-            if (faseNueva == GamePhase.Noche) sol.intensity = 0.05f;
-            else if (faseNueva == GamePhase.Dia) sol.intensity = 1.0f;
-            else if (faseNueva == GamePhase.Votacion) sol.intensity = 0.5f; // Atardecer de asamblea
+            if (!colorOriginalObtenido)
+            {
+                colorDiaOriginal = sol.color;
+                colorOriginalObtenido = true;
+            }
+
+            if (faseNueva == GamePhase.Noche)
+            {
+                sol.intensity = 0.05f;
+                sol.color = new Color(0.15f, 0.2f, 0.45f); // Luz de luna azulada
+                RenderSettings.ambientIntensity = 0.15f;    // Oscurecer ambiente general
+                RenderSettings.ambientLight = new Color(0.08f, 0.08f, 0.15f); // Luz ambiental nocturna fría
+
+                // Sincronizar el cielo a un tono azul oscuro nocturno
+                if (RenderSettings.skybox != null)
+                {
+                    Color azulNoche = new Color(0.02f, 0.04f, 0.12f);
+                    if (RenderSettings.skybox.HasProperty("_SkyTint")) RenderSettings.skybox.SetColor("_SkyTint", azulNoche);
+                    if (RenderSettings.skybox.HasProperty("_Tint")) RenderSettings.skybox.SetColor("_Tint", azulNoche);
+                }
+            }
+            else if (faseNueva == GamePhase.Dia)
+            {
+                sol.intensity = 1.0f;
+                sol.color = new Color(1.0f, 0.95f, 0.85f);  // Forzar una luz solar cálida/blanca limpia para el día
+                RenderSettings.ambientIntensity = 1.0f;    // Luz de ambiente brillante de día
+                RenderSettings.ambientLight = new Color(0.2f, 0.2f, 0.2f); // Luz ambiental neutral diurna
+
+                // Sincronizar el cielo a un hermoso azul diurno (en lugar de amarillo)
+                if (RenderSettings.skybox != null)
+                {
+                    Color azulDia = new Color(0.25f, 0.5f, 0.85f);
+                    if (RenderSettings.skybox.HasProperty("_SkyTint")) RenderSettings.skybox.SetColor("_SkyTint", azulDia);
+                    if (RenderSettings.skybox.HasProperty("_Tint")) RenderSettings.skybox.SetColor("_Tint", azulDia);
+                }
+            }
+            else if (faseNueva == GamePhase.Votacion)
+            {
+                sol.intensity = 0.5f;
+                sol.color = new Color(1.0f, 0.55f, 0.35f); // Color atardecer / anaranjado
+                RenderSettings.ambientIntensity = 0.6f;    // Luz de ambiente de atardecer
+                RenderSettings.ambientLight = new Color(0.18f, 0.14f, 0.12f); // Luz ambiental cálida
+
+                // Sincronizar el cielo a un tono atardecer anaranjado
+                if (RenderSettings.skybox != null)
+                {
+                    Color naranjaAtardecer = new Color(0.75f, 0.4f, 0.25f);
+                    if (RenderSettings.skybox.HasProperty("_SkyTint")) RenderSettings.skybox.SetColor("_SkyTint", naranjaAtardecer);
+                    if (RenderSettings.skybox.HasProperty("_Tint")) RenderSettings.skybox.SetColor("_Tint", naranjaAtardecer);
+                }
+            }
         }
 
         // --- Manejo del Ratón y Bloqueo de Movimiento ---
         // [Fix] Aseguramos que el EventSystem y Canvas estén activos al cambiar de fase
-        var es = FindFirstObjectByType<UnityEngine.EventSystems.EventSystem>(FindObjectsInactive.Include);
+        var es = GetEventSystem();
         if (es != null) es.gameObject.SetActive(true);
         
-        var canvasGameplay = FindFirstObjectByType<GameplayUI>(FindObjectsInactive.Include);
+        var canvasGameplay = GetGameplayUI();
         if (canvasGameplay != null) canvasGameplay.gameObject.SetActive(true);
+        
         if (faseNueva == GamePhase.Votacion)
         {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-
-            if (NetworkManager.Singleton.LocalClient != null && NetworkManager.Singleton.LocalClient.PlayerObject != null)
-            {
-                // [Fix] Uso de tipo real para evitar fallos de namespace en GetComponent
-                var tpc = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.ThirdPersonController>();
-                if (tpc != null) tpc.enabled = false;
-
-                // [Fix del Mouse] StarterAssets secuestra el ratón. Tenemos que indicarle a su script de Inputs que lo suelte.
-                var inputs = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.StarterAssetsInputs>();
-                if (inputs != null) 
-                {
-                    inputs.cursorLocked = false;
-                    inputs.cursorInputForLook = false;
-                    // Forzamos el desbloqueo físico del cursor para la UI de votación
-                    Cursor.lockState = CursorLockMode.None;
-                    Cursor.visible = true;
-                }
-            }
-
-            VotingUI votingUI = FindFirstObjectByType<VotingUI>(FindObjectsInactive.Include);
-            if (votingUI != null) votingUI.MostrarPantallaVotacion();
+            // Ya no mostramos la pantalla de votación ni bloqueamos al jugador automáticamente.
+            // Ahora lo tienen que hacer yendo al altar e interactuando.
         }
         else
         {
@@ -433,9 +695,8 @@ public class GameManager : NetworkBehaviour
                 PlayerState ps = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<PlayerState>();
                 if (ps != null && !ps.isDead.Value)
                 {
-                    // [Fix] Uso de tipo real
                     var tpc = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.ThirdPersonController>();
-                    if (tpc != null) tpc.enabled = true;
+                    if (tpc != null) tpc.CanMove = true;
 
                     // Le devolvemos el secuestro del ratón al StarterAssets
                     var inputs = NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.StarterAssetsInputs>();
@@ -447,25 +708,77 @@ public class GameManager : NetworkBehaviour
                 }
             }
 
-            VotingUI votingUI = FindFirstObjectByType<VotingUI>(FindObjectsInactive.Include);
+            VotingUI votingUI = GetVotingUI();
             if (votingUI != null) votingUI.OcultarPantallaVotacion();
         }
+    }
 
-        // ── Sistema de tareas: al comenzar un nuevo D\u00eda (Noche→Dia), asignar 2 tareas nuevas ──
-        // Solo el servidor tiene autoridad para repartir tareas.
-        if (IsServer && faseAntigua == GamePhase.Noche && faseNueva == GamePhase.Dia)
+    private void AlCambiarDeFase_Servidor(GamePhase faseAntigua, GamePhase faseNueva)
+    {
+        if (faseNueva == GamePhase.Noche)
+        {
+            muertesAlInicioDeLaNoche = ContarJugadoresMuertos();
+        }
+
+        // ── Sistema de tareas: al comenzar un nuevo Día (Noche→Dia), asignar misiones nuevas ──
+        if (faseAntigua == GamePhase.Noche && faseNueva == GamePhase.Dia)
         {
             List<ulong> jugadoresVivos = new List<ulong>();
             foreach (var client in NetworkManager.Singleton.ConnectedClients)
             {
-                PlayerState ps = client.Value.PlayerObject?.GetComponent<PlayerState>();
+                if (client.Value.PlayerObject == null) continue;
+                PlayerState ps = client.Value.PlayerObject.GetComponent<PlayerState>();
                 if (ps != null && !ps.isDead.Value)
                 {
-                    ps.tareasCompletadasHoy.Value = 0; // Reset contador del d\u00eda
+                    ps.tareasCompletadasHoy.Value = 0; // Reset contador del día
                     jugadoresVivos.Add(client.Key);
                 }
             }
-            AsignarTareasATodosLosJugadores(jugadoresVivos);
+
+            // [NUEVO] Resetear todos los interactuables de misión de la escena para que se puedan volver a hacer hoy
+            var interactuables = FindObjectsByType<Core.Environment.UniversalQuestInteractable>(FindObjectsInactive.Include);
+            foreach (var inter in interactuables)
+            {
+                inter.ResetearMisionDiaria();
+            }
+
+            var interactuablesLegacy = FindObjectsByType<Core.Environment.InteractivableMisionUniversal>(FindObjectsInactive.Include);
+            foreach (var inter in interactuablesLegacy)
+            {
+                inter.ResetearMisionDiaria();
+            }
+
+            Debug.Log("[Servidor] Misiones diarias reseteadas para el nuevo día.");
+
+            AsignarMisionesBasicasADiaNuevo(jugadoresVivos);
+        }
+
+        // ── Sistema de Reloj del Servidor (Basado en Eventos / Coroutines) ──
+        if (!partidaTerminada)
+        {
+            if (serverPhaseTimer != null) StopCoroutine(serverPhaseTimer);
+
+            if (faseNueva == GamePhase.Dia)
+            {
+                if (esPrimerDia)
+                {
+                    Debug.Log("[Servidor] Fin del Primer Día. No hay votación hoy, cae la Noche directa.");
+                    esPrimerDia = false;
+                    serverPhaseTimer = StartCoroutine(RutinaRelojFase(tiempoDiaSegundos, GamePhase.Noche, null));
+                }
+                else
+                {
+                    serverPhaseTimer = StartCoroutine(RutinaRelojFase(tiempoDiaSegundos, GamePhase.Votacion, PrepararVotacion));
+                }
+            }
+            else if (faseNueva == GamePhase.Votacion)
+            {
+                serverPhaseTimer = StartCoroutine(RutinaRelojFase(tiempoVotacionSegundos, GamePhase.Noche, ResolverVotacion));
+            }
+            else if (faseNueva == GamePhase.Noche)
+            {
+                serverPhaseTimer = StartCoroutine(RutinaRelojFase(tiempoNocheSegundos, GamePhase.Dia, EvaluarAmanecer));
+            }
         }
     }
 
@@ -492,7 +805,7 @@ public class GameManager : NetworkBehaviour
             
             // [CORRECCIÓN CRÍTICA] El Prefab 'PlayerArmatureLobby' no contenía el componente PlayerLobbyPose!
             // Por ello la función FindObjectsByType<PlayerLobbyPose> jamás lo encontraba. Lo buscaremos por nombre.
-            NetworkObject[] todosLosObjetosEnRed = FindObjectsByType<NetworkObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            NetworkObject[] todosLosObjetosEnRed = FindObjectsByType<NetworkObject>(FindObjectsInactive.Include);
             foreach (var redObj in todosLosObjetosEnRed)
             {
                 if (redObj.gameObject.name.Contains("PlayerArmatureLobby"))
@@ -552,7 +865,19 @@ public class GameManager : NetworkBehaviour
         noLobos.Remove(wolfId);
         ulong herreroId = noLobos.Count > 0 ? noLobos[Random.Range(0, noLobos.Count)] : ulong.MaxValue;
 
-        SpawnManager spawnManager = FindFirstObjectByType<SpawnManager>();
+        SpawnManager spawnManager = FindAnyObjectByType<SpawnManager>();
+
+        // [NUEVO] Recopilar y barajar las casas para asignarlas
+        HouseController[] todasLasCasas = FindObjectsByType<HouseController>(FindObjectsInactive.Exclude);
+        List<HouseController> casasDisponibles = new List<HouseController>(todasLasCasas);
+        for (int i = 0; i < casasDisponibles.Count; i++)
+        {
+            HouseController temp = casasDisponibles[i];
+            int r = Random.Range(i, casasDisponibles.Count);
+            casasDisponibles[i] = casasDisponibles[r];
+            casasDisponibles[r] = temp;
+        }
+        int indexCasa = 0;
 
         foreach (ulong clientId in clientIds)
         {
@@ -582,6 +907,20 @@ public class GameManager : NetworkBehaviour
                         // [NUEVO] Asignar el rol de aldea al PlayerState
                         estadoP.rolAldea.Value = rolAsignado;
 
+                        // [NUEVO] Asignar el nickname del jugador
+                        string nickname = ObtenerNicknameCliente(clientId);
+                        estadoP.playerName.Value = new FixedString32Bytes(nickname);
+
+                        // [NUEVO] Asignar una casa al jugador
+                        if (indexCasa < casasDisponibles.Count)
+                        {
+                            HouseController casaA = casasDisponibles[indexCasa];
+                            casaA.HouseOwnerClientId.Value = clientId;
+                            estadoP.myHouseId.Value = casaA.NetworkObjectId;
+                            indexCasa++;
+                            Debug.Log($"* Casa {casaA.NetworkObjectId} asignada al Cliente {clientId}");
+                        }
+
                         ClientRpcParams enviarSoloAlDueño = new ClientRpcParams
                         {
                             Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientId } }
@@ -599,15 +938,18 @@ public class GameManager : NetworkBehaviour
             RecibirRolClientRpc(assignedRoleText, rpcParams);
         }
 
-        // ── Asignamos las Tareas Iniciales (Día 1) ──
-        if (IsServer)
-        {
-            AsignarTareasATodosLosJugadores(clientIds);
-        }
-
-        // Al terminar de repartir roles y tareas, el Servidor empuja el reloj hacia el DÍA número 1
+        // Al terminar de repartir roles, el Servidor empuja el reloj hacia el DÍA número 1
         currentPhase.Value = GamePhase.Dia;
         tiempoRestanteFase = tiempoDiaSegundos;
+
+        // ── Asignamos las Tareas Iniciales (Día 1) con un frame de retardo ──
+        // [FIX] SpawnAsPlayerObject de NGO necesita al menos un frame para registrar los
+        // PlayerObjects en ConnectedClients. Si llamamos ServerAssignQuest en el mismo frame,
+        // GetComponent<PlayerQuestTracker> puede devolver null y las misiones no se asignan.
+        if (IsServer)
+        {
+            StartCoroutine(AsignarMisionesConRetardo(clientIds));
+        }
     }
 
     [ClientRpc]
@@ -615,7 +957,7 @@ public class GameManager : NetworkBehaviour
     {
         Debug.Log($"<color=cyan>¡El servidor me ha dicho en secreto que soy:</color> <color=red><b>{rol}</b></color>!");
         
-        GameplayUI gameUI = FindFirstObjectByType<GameplayUI>();
+        GameplayUI gameUI = GetGameplayUI();
         if (gameUI != null)
         {
             gameUI.MostrarRol($"ERES {(rol == "Lobo" ? "EL LOBO" : "UN ALDEANO")}");
@@ -632,6 +974,7 @@ public class GameManager : NetworkBehaviour
 
         foreach (var client in NetworkManager.Singleton.ConnectedClients)
         {
+            if (client.Value.PlayerObject == null) continue;
             PlayerState ps = client.Value.PlayerObject.GetComponent<PlayerState>();
             if (ps != null && !ps.isDead.Value)
             {
@@ -667,7 +1010,7 @@ public class GameManager : NetworkBehaviour
     [ClientRpc]
     private void AnunciarVictoriaClientRpc(string mensajeGanador)
     {
-        GameplayUI gameUI = FindFirstObjectByType<GameplayUI>();
+        GameplayUI gameUI = GetGameplayUI();
         if (gameUI != null)
         {
             gameUI.MostrarVictoria(mensajeGanador);
@@ -700,131 +1043,267 @@ public class GameManager : NetworkBehaviour
     }
 
     // ==========================================
-    // SISTEMA DE TAREAS (V1.3)
+    // SISTEMA DE MISIONES BÁSICAS (QuestSystem)
     // ==========================================
 
-    [Tooltip("La lista en memoria de todos los TaskPoint de la escena (solo servidor).")]
-    private List<TaskPoint> todosLosTaskPoints = new List<TaskPoint>();
-
-    private void AsignarTareasATodosLosJugadores(List<ulong> jugadoresVivosIds)
+    /// <summary>
+    /// [SERVER] Espera ACTIVAMENTE hasta que todos los PlayerObjects estén registrados en NGO.
+    /// WaitForEndOfFrame no es suficiente: NGO propaga los PlayerObjects en múltiples frames de red.
+    /// </summary>
+    private IEnumerator AsignarMisionesConRetardo(List<ulong> jugadoresEsperados)
     {
-        if (!IsServer) return;
+        float tiempoLimite = 5f; // Tiempo máximo de espera en segundos
+        float tiempoEsperado = 0f;
 
-        // 1. Recolectar o actualizar la lista de todas las tareas del mapa
-        TaskPoint[] puntosFisicos = FindObjectsByType<TaskPoint>(FindObjectsSortMode.None);
-        todosLosTaskPoints = new List<TaskPoint>(puntosFisicos);
+        Debug.Log($"[GameManager] Esperando que NGO registre {jugadoresEsperados.Count} PlayerObjects...");
 
-        if (todosLosTaskPoints.Count == 0)
+        while (tiempoEsperado < tiempoLimite)
         {
-            Debug.LogWarning("[Server] No se encontraron TaskPoints en la escena. Nadie recibirá tareas.");
+            yield return null; // Esperar el siguiente frame de Unity
+            tiempoEsperado += Time.deltaTime;
+
+            // Contar cuántos clientes ya tienen PlayerObject válido
+            int listos = 0;
+            foreach (ulong id in jugadoresEsperados)
+            {
+                if (NetworkManager.Singleton.ConnectedClients.TryGetValue(id, out var client)
+                    && client.PlayerObject != null)
+                {
+                    listos++;
+                }
+            }
+
+            // Cuando todos estén listos, asignamos las misiones
+            if (listos >= jugadoresEsperados.Count)
+            {
+                Debug.Log($"[GameManager] Todos los PlayerObjects listos tras {tiempoEsperado:F2}s. Asignando misiones...");
+                AsignarMisionesBasicasADiaNuevo(jugadoresEsperados);
+                yield break;
+            }
+        }
+
+        // Timeout: asignar igualmente con lo que haya disponible
+        Debug.LogWarning($"[GameManager] Timeout ({tiempoLimite}s) esperando PlayerObjects. Asignando misiones con los jugadores disponibles...");
+        AsignarMisionesBasicasADiaNuevo(jugadoresEsperados);
+    }
+
+    private void AsignarMisionesBasicasADiaNuevo(List<ulong> jugadoresVivosIds)
+    {
+        if (!IsServer || Core.QuestSystem.QuestManager.Instance == null) return;
+
+        // Recopilamos todos los interactuables de la escena una sola vez para pasarlos a la validación
+        Core.Environment.UniversalQuestInteractable[] todosLosInteractuables =
+            FindObjectsByType<Core.Environment.UniversalQuestInteractable>(FindObjectsInactive.Include);
+
+        Core.Environment.InteractivableMisionUniversal[] todosLosInteractuablesViejos =
+            FindObjectsByType<Core.Environment.InteractivableMisionUniversal>(FindObjectsInactive.Include);
+
+        // 1. Obtener todas las misiones básicas registradas Y que tengan objetos en escena
+        // [FIX] Filtrar misiones cuyos pasos no tienen ningún interactuable colocado en la escena.
+        // Así el jugador nunca recibe una misión imposible de completar.
+        List<Core.QuestSystem.QuestData> basicQuests = new List<Core.QuestSystem.QuestData>();
+        foreach (var q in Core.QuestSystem.QuestManager.Instance.GetAllAvailableQuests())
+        {
+            if (q != null && q.esMisionBasica && MisionTieneInteractuablesEnEscena(q, todosLosInteractuables, todosLosInteractuablesViejos))
+            {
+                basicQuests.Add(q);
+            }
+        }
+
+        Debug.Log($"[GameManager] Misiones básicas válidas (con objetos en escena): {basicQuests.Count}");
+
+        if (basicQuests.Count == 0)
+        {
+            Debug.LogWarning("[GameManager] No hay misiones básicas completables. Verifica que los QuestZonePoint/BasicQuestInteractable estén colocados en la escena con la zona correcta.");
             return;
         }
 
-        Debug.Log($"[Server] Repartiendo {tareasPerJugador} tareas por jugador (Total disponibles: {todosLosTaskPoints.Count}).");
+        // 2. Diagnóstico: mostrar cuántos clientes hay y si tienen PlayerObject
+        Debug.Log($"[GameManager] ConnectedClients.Count = {NetworkManager.Singleton.ConnectedClients.Count}");
+        foreach (var entry in NetworkManager.Singleton.ConnectedClients)
+        {
+            bool tienePlayerObj = entry.Value.PlayerObject != null;
+            bool tieneTracker = tienePlayerObj && entry.Value.PlayerObject.GetComponent<Core.QuestSystem.PlayerQuestTracker>() != null;
+            Debug.Log($"  Cliente {entry.Key}: PlayerObject={tienePlayerObj} | Tracker={tieneTracker}");
+        }
 
+        // 3. Asignar misión a cada cliente vivo en jugadoresVivosIds
+        int asignadas = 0;
         foreach (ulong clientId in jugadoresVivosIds)
         {
-            // Verificación de seguridad
-            if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var clientInfo)) continue;
-            PlayerState ps = clientInfo.PlayerObject?.GetComponent<PlayerState>();
-            if (ps == null || ps.isDead.Value) continue;
-
-            // 2. Barajar la lista de tareas para este jugador específico
-            List<TaskPoint> tareasBarajadas = new List<TaskPoint>(todosLosTaskPoints);
-            // Simple Fisher-Yates shuffle
-            for (int i = tareasBarajadas.Count - 1; i > 0; i--)
+            if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var clientEntry))
             {
-                int r = Random.Range(0, i + 1);
-                (tareasBarajadas[i], tareasBarajadas[r]) = (tareasBarajadas[r], tareasBarajadas[i]);
+                Debug.LogWarning($"[GameManager] Cliente {clientId} no se encuentra en ConnectedClients.");
+                continue;
             }
 
-            // 3. Seleccionar las primeras N tareas
-            int cantidadAAsignar = Mathf.Min(tareasPerJugador, tareasBarajadas.Count);
-            List<string> jsonInfos = new List<string>();
-
-            for (int i = 0; i < cantidadAAsignar; i++)
+            if (clientEntry.PlayerObject == null)
             {
-                TaskPoint tp = tareasBarajadas[i];
-                TaskInfo info = new TaskInfo(tp.taskId, tp.nombreTarea);
-                jsonInfos.Add(JsonUtility.ToJson(info));
+                Debug.LogWarning($"[GameManager] Cliente {clientId} no tiene PlayerObject todavía. Saltando.");
+                continue;
             }
 
-            // 4. Empaquetar el array y enviárselo secretamente SOLO al dueño
-            string jsonArray = "[" + string.Join(",", jsonInfos) + "]";
-
-            ClientRpcParams parametrosPrivados = new ClientRpcParams
+            PlayerState ps = clientEntry.PlayerObject.GetComponent<PlayerState>();
+            if (ps == null)
             {
-                Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { clientId } }
-            };
+                Debug.LogWarning($"[GameManager] Cliente {clientId}: PlayerObject existe pero SIN PlayerState.");
+                continue;
+            }
+            if (ps.isDead.Value) continue; // Muertos no reciben misiones
 
-            RecibirAsignacionTareasClientRpc(jsonArray, ps.isWolf.Value, parametrosPrivados);
+            Core.QuestSystem.PlayerQuestTracker tracker = clientEntry.PlayerObject.GetComponent<Core.QuestSystem.PlayerQuestTracker>();
+            if (tracker == null)
+            {
+                Debug.LogWarning($"[GameManager] Cliente {clientId}: PlayerObject existe pero SIN PlayerQuestTracker.");
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(tracker.currentQuestID.Value.ToString().TrimEnd('\0')))
+            {
+                Debug.Log($"[GameManager] Cliente {clientId} ya tiene misión activa: {tracker.currentQuestID.Value.ToString().TrimEnd('\0')}. No se sobreescribe.");
+                continue;
+            }
+
+            tracker.ResetDailyQuests(); // Resetea las completadas hoy a 0
+            string questId = GetRandomBasicQuestID();
+            if (!string.IsNullOrEmpty(questId))
+            {
+                tracker.ServerAssignQuest(questId);
+                asignadas++;
+                Debug.Log($"[GameManager] ✅ Misión básica 1/2 '{questId}' asignada al jugador {clientId} (isWolf={ps.isWolf.Value})");
+            }
         }
+
+        Debug.Log($"[GameManager] Total misiones básicas asignadas este día: {asignadas}");
     }
 
-    [ClientRpc]
-    private void RecibirAsignacionTareasClientRpc(string tareasJsonArray, bool esLobo, ClientRpcParams clientRpcParams = default)
+    public string GetRandomBasicQuestID(string excludeQuestID = "")
     {
-        Debug.Log($"<color=cyan>[Red]</color> El servidor me acaba de entregar mis tareas de hoy: {tareasJsonArray}");
+        if (Core.QuestSystem.QuestManager.Instance == null) return "";
 
-        // 1. Deserializar el JSON trampa de Unity (Unity no soporta arrays puros bien usando JsonUtility, necesitamos un wrapper o un truco. Usaremos un parseo basico por simplicidad si se empacó manual)
-        // Para simplificar, asumimos que sabemos parsearlo o usamos un array Wrapper (aquí usaremos un array simple deserializando objeto por objeto).
-        // Como JsonUtility es malo con arrays raiz, parseémoslo cortando strings.
-        
-        // --- PARSEO RUDIMENTARIO ---
-        List<TaskInfo> listaParseada = new List<TaskInfo>();
-        tareasJsonArray = tareasJsonArray.Trim('[', ']'); // "["{...}","{...}"]" => "{...}","{...}"
-        
-        // Separamos por la cadena "," (incluyendo comillas si las hay). Lo más seguro es usar un wrapper real, pero para el prototipo servirá.
-        // Mejor si mandamos el array como strings individuales... pero vamos a solucionarlo usando un struct Wrapper interno.
-        
-        // Hack rapido:
-        string[] objetosJson = tareasJsonArray.Split(new string[] { "},{" }, System.StringSplitOptions.RemoveEmptyEntries);
-        
-        for (int i = 0; i < objetosJson.Length; i++)
+        Core.Environment.UniversalQuestInteractable[] todosLosInteractuables =
+            FindObjectsByType<Core.Environment.UniversalQuestInteractable>(FindObjectsInactive.Include);
+
+        Core.Environment.InteractivableMisionUniversal[] todosLosInteractuablesViejos =
+            FindObjectsByType<Core.Environment.InteractivableMisionUniversal>(FindObjectsInactive.Include);
+
+        List<Core.QuestSystem.QuestData> basicQuests = new List<Core.QuestSystem.QuestData>();
+        foreach (var q in Core.QuestSystem.QuestManager.Instance.GetAllAvailableQuests())
         {
-            string objStr = objetosJson[i];
-            if (!objStr.StartsWith("{")) objStr = "{" + objStr;
-            if (!objStr.EndsWith("}")) objStr = objStr + "}";
-            
-            TaskInfo tInfo = JsonUtility.FromJson<TaskInfo>(objStr);
-            if (tInfo != null && !string.IsNullOrEmpty(tInfo.taskId))
+            if (q != null && q.esMisionBasica && MisionTieneInteractuablesEnEscena(q, todosLosInteractuables, todosLosInteractuablesViejos))
             {
-                listaParseada.Add(tInfo);
+                if (string.IsNullOrEmpty(excludeQuestID) || q.questID != excludeQuestID)
+                {
+                    basicQuests.Add(q);
+                }
             }
         }
 
-        // 2. Avisarle a nuestro HUD
-        GameplayUI gameUI = FindFirstObjectByType<GameplayUI>();
-        if (gameUI != null)
+        // Fallback: si al excluir no queda ninguna, añadimos todas de nuevo
+        if (basicQuests.Count == 0 && !string.IsNullOrEmpty(excludeQuestID))
         {
-            gameUI.ActualizarListaTareas(listaParseada, esLobo);
+            foreach (var q in Core.QuestSystem.QuestManager.Instance.GetAllAvailableQuests())
+            {
+                if (q != null && q.esMisionBasica && MisionTieneInteractuablesEnEscena(q, todosLosInteractuables, todosLosInteractuablesViejos))
+                {
+                    basicQuests.Add(q);
+                }
+            }
         }
 
-        // 3. Avisarle a las "estaciones físicas" (TaskPoints) en la escena
-        // Para que se enciendan/apaguen localmente (Brillo dorado, etc.)
-        TaskPoint[] todosLosPuntosL = FindObjectsByType<TaskPoint>(FindObjectsSortMode.None);
-        foreach (TaskPoint tp in todosLosPuntosL)
-        {
-            bool meTocaAmi = listaParseada.Exists(t => t.taskId == tp.taskId);
-            tp.MarcarComoAsignada(meTocaAmi);
-        }
+        if (basicQuests.Count == 0) return "";
+
+        int randomIndex = Random.Range(0, basicQuests.Count);
+        return basicQuests[randomIndex].questID;
     }
+
+    /// <summary>
+    /// [SERVER] Verifica que cada paso de la misión tenga al menos un BasicQuestInteractable,
+    /// QuestZonePoint o UniversalQuestInteractable en la escena con el MaterialType y ZoneID correctos.
+    /// Si falta algún paso, la misión se descarta del sorteo para evitar misiones imposibles.
+    /// </summary>
+    private bool MisionTieneInteractuablesEnEscena(
+        Core.QuestSystem.QuestData quest,
+        Core.Environment.UniversalQuestInteractable[] todosLosInteractuables,
+        Core.Environment.InteractivableMisionUniversal[] todosLosInteractuablesViejos)
+    {
+        if (quest.pasos == null || quest.pasos.Count == 0) return false;
+
+        foreach (var paso in quest.pasos)
+        {
+            bool pasoTieneObjeto = false;
+
+            // 1. Buscar en los UniversalQuestInteractables nuevos
+            foreach (var interactable in todosLosInteractuables)
+            {
+                if (interactable.zonaUbicacion == paso.zonaRequerida)
+                {
+                    // Reglas de coincidencia permitiendo:
+                    // - Coincidencia exacta de material
+                    // - O que el paso requiera "Cualquiera"
+                    // - O que el interactuable en el escenario esté configurado como "Cualquiera"
+                    // - O que el interactuable tenga asignada explícitamente esta misión en su QuestData
+                    if (interactable.materialAsignado == paso.materialRequerido ||
+                        paso.materialRequerido == Core.Enums.MaterialType.Cualquiera ||
+                        paso.materialRequerido == Core.Enums.MaterialType.Ninguno || // Si el paso no requiere material, sirve cualquier interactuable en la zona
+                        interactable.materialAsignado == Core.Enums.MaterialType.Cualquiera ||
+                        (interactable.questData != null && interactable.questData.questID == quest.questID))
+                    {
+                        pasoTieneObjeto = true;
+                        break;
+                    }
+                }
+            }
+
+            // 2. Fallback: Buscar en los interactuables antiguos (InteractivableMisionUniversal)
+            if (!pasoTieneObjeto)
+            {
+                foreach (var interactableViejo in todosLosInteractuablesViejos)
+                {
+                    if (interactableViejo.idMision == quest.questID)
+                    {
+                        pasoTieneObjeto = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!pasoTieneObjeto)
+            {
+                Debug.LogWarning($"[GameManager] Misión '{quest.questID}' descartada: " +
+                    $"no hay ningún objeto '{paso.materialRequerido}' en zona '{paso.zonaRequerida}' en la escena.");
+                return false;
+            }
+        }
+
+        return true; // Todos los pasos tienen objeto en escena
+    }
+
+
     // ==========================================
     // SISTEMA DE EXPULSIÓN (KICK)
     // ==========================================
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    public void KickPlayerServerRpc(ulong clientIdToKick)
+    public void KickPlayerServerRpc(ulong clientIdToKick, RpcParams rpcParams = default)
     {
         // Solo el servidor/Host real tiene permiso para ejecutar la patada
         if (!IsServer) return;
 
-        // No puedes patearte a ti mismo (el Host)
-        if (clientIdToKick == NetworkManager.Singleton.LocalClientId) return;
+        // Validamos que el emisor de la petición sea el Servidor/Host
+        if (rpcParams.Receive.SenderClientId != NetworkManager.ServerClientId)
+        {
+            Debug.LogWarning($"[GameManager] Cliente {rpcParams.Receive.SenderClientId} intentó expulsar al jugador {clientIdToKick} sin ser el Host.");
+            return;
+        }
 
-        Debug.Log($"<color=red>[SERVIOR] Expulsando al jugador {clientIdToKick} por orden del Host.</color>");
+        // No puedes patearte a ti mismo (el Host)
+        if (clientIdToKick == NetworkManager.ServerClientId) return;
+
+        Debug.Log($"<color=red>[SERVIDOR] Expulsando al jugador {clientIdToKick} por orden del Host.</color>");
         
         // Desconectamos al cliente de la red de Netcode
         NetworkManager.Singleton.DisconnectClient(clientIdToKick);
     }
 }
+

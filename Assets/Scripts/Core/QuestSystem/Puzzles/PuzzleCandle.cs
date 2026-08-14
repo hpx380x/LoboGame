@@ -55,14 +55,14 @@ public class PuzzleCandle : NetworkBehaviour
         if (netObj != null && netObj.IsOwner)
         {
             jugadorCerca = false;
-            GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+            GameplayUI ui = FindAnyObjectByType<GameplayUI>();
             if (ui != null) ui.MostrarMensajeTarea("", 0f);
         }
     }
 
     private void ActualizarPrompt()
     {
-        GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+        GameplayUI ui = FindAnyObjectByType<GameplayUI>();
         if (ui != null)
         {
             if (puedeInteractuar.Value) 
@@ -121,3 +121,4 @@ public class PuzzleCandle : NetworkBehaviour
         }
     }
 }
+

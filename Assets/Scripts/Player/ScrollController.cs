@@ -12,6 +12,17 @@ namespace StarterAssets
         private bool _isReading;
         private GameplayUI _localGameplayUI;
         private PlayerState _playerState;
+        private float _spawnTime;
+
+        private void Awake()
+        {
+            _spawnTime = Time.time;
+        }
+
+        private void OnEnable()
+        {
+            _spawnTime = Time.time;
+        }
 
         // OnNetworkSpawn ensures we initialize once the object is ready on the network
         public override void OnNetworkSpawn()
@@ -19,7 +30,7 @@ namespace StarterAssets
             if (IsOwner)
             {
                 // Enlaza la UI local del cliente con este jugador específico
-                _localGameplayUI = Object.FindFirstObjectByType<GameplayUI>();
+                _localGameplayUI = Object.FindAnyObjectByType<GameplayUI>();
                 
                 // Conseguimos el estado del jugador para saber si está vivo o muerto
                 _playerState = GetComponent<PlayerState>();
@@ -27,6 +38,11 @@ namespace StarterAssets
                 {
                     _playerState.isDead.OnValueChanged += OnDeathStateChanged;
                 }
+
+                // [GARANTÍA DE SPAWN] Asegurar que el movimiento nazca desbloqueado y el pergamino cerrado
+                _isReading = false;
+                if (TryGetComponent(out ThirdPersonController tpc)) tpc.CanMove = true;
+                if (_localGameplayUI != null) _localGameplayUI.ToggleScroll(false);
 
                 Debug.Log($"[PergaminoLog] Jugador Local {_localGameplayUI != null} | Enlazado al GameplayUI.");
             }
@@ -53,14 +69,35 @@ namespace StarterAssets
             }
         }
 
-        // OnScroll is automatically called by PlayerInput if set to "Send Messages"
-        public void OnScroll(InputValue value)
-        {
-            Debug.Log($"[PergaminoLog] Input Recibido ('Q'). IsOwner: {IsOwner} | isPressed: {value.isPressed}");
+        public bool IsReading => _isReading;
 
-            // [Robustez] Solo bloqueamos si el NetworkManagerestá activo y REALMENTE no somos el dueño.
-            // Si estamos en modo de prueba local, dejamos que pase.
+        private void Update()
+        {
             if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !IsOwner) return;
+
+            // Detección limpia a través del nuevo Input System
+            if (TryGetComponent(out StarterAssetsInputs inputs) && inputs.scroll)
+            {
+                inputs.scroll = false; // Consumimos el input para que no se dispare múltiples veces
+                ToggleReading();
+            }
+        }
+
+        private void ToggleReading()
+        {
+            // Si el pergamino ya está abierto, siempre permitimos cerrarlo
+            if (_isReading)
+            {
+                ExecuteToggle();
+                return;
+            }
+
+            // Evitamos abrir el pergamino si los controles del jugador están bloqueados (minijuegos, aturdimiento, votación, etc.)
+            if (TryGetComponent(out StarterAssetsInputs inputs) && inputs.isInputLocked)
+            {
+                Debug.Log("[PergaminoLog] Controles bloqueados, ignorando apertura de pergamino.");
+                return;
+            }
 
             // ¡BLOQUEO DE MUERTE! Si el jugador está muerto, se le prohíbe abrir el pergamino.
             if (_playerState != null && _playerState.isDead.Value)
@@ -69,11 +106,7 @@ namespace StarterAssets
                 return;
             }
 
-            // Only trigger on PRESS (not release). This is the "One-Shot" fix.
-            if (value.isPressed)
-            {
-                ExecuteToggle();
-            }
+            ExecuteToggle();
         }
 
         private void ExecuteToggle()
@@ -84,7 +117,7 @@ namespace StarterAssets
             // --- INTERACCIÓN CON EL HUD LOCAL ---
             if (_localGameplayUI == null) 
             {
-                _localGameplayUI = Object.FindFirstObjectByType<GameplayUI>();
+                _localGameplayUI = Object.FindAnyObjectByType<GameplayUI>();
                 Debug.Log("[PergaminoLog] Buscando GameplayUI de emergencia...");
             }
 
@@ -98,7 +131,20 @@ namespace StarterAssets
                 Debug.LogError($"[PergaminoLog] ¡ERROR! No se encontró GameplayUI para abrir el Canvas.");
             }
 
+            // --- MANEJO DE CURSOR E INPUT DE MOUSE/TECLADO ---
+            if (TryGetComponent(out StarterAssetsInputs inputs))
+            {
+                if (!_isReading)
+                {
+                    // Aseguramos que siga bloqueado por si acaso
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                    inputs.cursorInputForLook = true;
+                }
+            }
+
             Debug.Log($"[ScrollController] Toggle UI Scroll HUD! State: {_isReading}");
         }
     }
 }
+

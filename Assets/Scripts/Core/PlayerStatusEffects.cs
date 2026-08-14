@@ -64,8 +64,7 @@ public class PlayerStatusEffects : NetworkBehaviour
 
         if (IsServer)
         {
-            GameManager gm = FindFirstObjectByType<GameManager>();
-            if (gm != null) gm.currentPhase.OnValueChanged += AlCambiarFaseServidor;
+            if (GameManager.Instance != null) GameManager.Instance.currentPhase.OnValueChanged += AlCambiarFaseServidor;
         }
     }
 
@@ -75,8 +74,7 @@ public class PlayerStatusEffects : NetworkBehaviour
         
         if (IsServer)
         {
-            GameManager gm = FindFirstObjectByType<GameManager>();
-            if (gm != null) gm.currentPhase.OnValueChanged -= AlCambiarFaseServidor;
+            if (GameManager.Instance != null) GameManager.Instance.currentPhase.OnValueChanged -= AlCambiarFaseServidor;
         }
         
         base.OnNetworkDespawn();
@@ -99,15 +97,15 @@ public class PlayerStatusEffects : NetworkBehaviour
     {
         if (estadoNuevo == true)
         {
-            if (thirdPersonController != null) thirdPersonController.enabled = false;
+            if (thirdPersonController != null) thirdPersonController.CanMove = false;
             if (animator != null) animator.SetFloat("Speed", 0f);
             Debug.Log($"<color=green>[Visión Local] ¡Jugador {OwnerClientId} se está asfixiando por Bomba Apestosa!</color>");
         }
         else
         {
             if (thirdPersonController != null && playerState != null && !playerState.isDead.Value) 
-                thirdPersonController.enabled = true;
-                
+                thirdPersonController.CanMove = true;
+                 
             Debug.Log($"<color=grey>[Visión Local] Jugador {OwnerClientId} volvió a respirar.</color>");
         }
     }
@@ -154,8 +152,7 @@ public class PlayerStatusEffects : NetworkBehaviour
         isPoisoned.Value = false;
         Debug.Log($"<color=purple>[Server] El jugador {OwnerClientId} ha fallecido trágicamente por el veneno.</color>");
         
-        GameManager gm = FindFirstObjectByType<GameManager>();
-        if (gm != null) gm.CheckWinConditions();
+        if (GameManager.Instance != null) GameManager.Instance.CheckWinConditions();
     }
 
     [ClientRpc]
@@ -164,3 +161,4 @@ public class PlayerStatusEffects : NetworkBehaviour
         Debug.Log($"<color=purple>☠️ [Visual] El jugador {OwnerClientId} empezó a burbujear gas venenoso.</color>");
     }
 }
+

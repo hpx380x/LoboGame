@@ -2,56 +2,65 @@ using System.Collections.Generic;
 using UnityEngine;
 using Core.Enums;
 
-// Definimos el tipo de acción que requiere este paso
-public enum TipoPasoMision
+namespace Core.QuestSystem
 {
-    Recolectar,     // Obtener X cantidad de un objeto tirado en el suelo
-    Entregar,       // Llevar los objetos a un NPC o zona específica
-    Interactuar,    // Pulsar o mantener E en una estación específica (minijuego)
-    AyudarAldeano,  // Acercarse a otro jugador y mantener pulsado E para ayudarle
-    MinijuegoPantalla,  // [NUEVO] Abrir HUD de minijuego (Cables)
-    PuzzleSecuencia,    // [NUEVO] Resolver secuencia de velas (Simon Says)
-    CrafteoSocial       // [NUEVO] Interactuar con el Herrero/Oficio para crear objeto
-}
+    [System.Serializable]
+    public class QuestStep
+    {
+        [Header("Requisitos del Paso")]
+        public MaterialType materialRequerido = MaterialType.AceroSierra;
+        public ZoneID zonaRequerida = ZoneID.Desconocida;
 
-public enum RarezaObjeto
-{
-    Normal,
-    Especial,
-    Legendario
-}
+        [Tooltip("Texto opcional para la interfaz (ej. 'Busca hierbas en el bosque')")]
+        public string descripcion;
 
-[System.Serializable]
-public class PasoMision
-{
-    [Header("Configuración del Paso")]
-    public TipoPasoMision tipoPaso = TipoPasoMision.Recolectar;
-    
-    [Tooltip("El identificador u objeto requerido para este paso. Ej: 'Manzana', o el ID del NPC.")]
-    public string idObjetivo = "ObjetoGenerico";
+        [Tooltip("ID de la animación específica de este paso (ej: 1 para agacharse, 8 para regar). Si es 0, usará la del interactuable.")]
+        public int animationInteractionType = 0;
 
-    [Tooltip("Cantidad necesaria. Ej: Si es recolectar, 5 manzanas. Si es mantener E, 5 segundos.")]
-    public int cantidadRequerida = 1;
+        [Tooltip("Duración en segundos para completar este paso específico. Si es 0 o menor, usará la de la misión o interactuable.")]
+        public float interactionDuration = 0f;
 
-    [Tooltip("Instrucción para el jugador (mostrar en UI). Ej: 'Recoge 5 manzanas'.")]
-    public string descripcionPaso = "Realiza esta tarea";
-}
+        /// <summary>Devuelve el tipo de animación de este paso, con fallback al QuestData padre.</summary>
+        public int GetAnimType(QuestData parent) =>
+            animationInteractionType != 0 ? animationInteractionType : (parent != null ? parent.animationInteractionType : 0);
 
-[CreateAssetMenu(fileName = "NewQuest", menuName = "LoboGame/Quest Data", order = 1)]
-public class QuestData : ScriptableObject
-{
-    [Header("Info Principal")]
-    public string nombreMision = "Nueva Misión";
-    [TextArea]
-    public string descripcionMision = "Descripción completa de la historia o motivo.";
+        /// <summary>Devuelve la duración de este paso, con fallback al QuestData padre y luego al valor por defecto.</summary>
+        public float GetDuration(QuestData parent, float defaultDuration = 2f) =>
+            interactionDuration > 0f ? interactionDuration : (parent != null && parent.interactionDuration > 0f ? parent.interactionDuration : defaultDuration);
+    }
 
-    [Header("Pasos de la Misión")]
-    [Tooltip("La cadena de tareas que hay que completar en orden.")]
-    public List<PasoMision> pasos = new List<PasoMision>();
+    [CreateAssetMenu(fileName = "NewQuestData", menuName = "LoboGame/Modular Quest Data", order = 1)]
+    public class QuestData : ScriptableObject
+    {
+        [Header("Información de la Misión")]
+        [Tooltip("ID único para red y guardado (ej. 'mision_espada')")]
+        public string questID;
+        public string nombreMision = "Nueva Misión";
+        
+        [TextArea]
+        public string descripcionMision = "Resumen de lo que el jugador debe crear o conseguir.";
 
-    [Header("Recompensas Finales")]
-    [Tooltip("Objeto final otorgado al jugador cuando completa el último paso.")]
-    public TipoObjeto objetoRecompensaFinal = TipoObjeto.Ninguno;
-    [Tooltip("Monedas otorgadas al finalizar la cadena.")]
-    public int monedasRecompensaFinal = 0;
+        [Header("Proceso (Pasos secuenciales)")]
+        [Tooltip("Deben ser exactamente los pasos necesarios para fabricar/obtener el objeto (usualmente 3)")]
+        public List<QuestStep> pasos = new List<QuestStep>();
+
+        [Header("Recompensas Finales")]
+        [Tooltip("El objeto real que se le dará al jugador al terminar todos los pasos")]
+        public ItemData objetoRecompensa;
+        
+        [Tooltip("Cantidad de monedas de oro que recibirá el jugador")]
+        public int oroRecompensa;
+
+        [Header("Tipo de Misión")]
+        [Tooltip("¿Es una misión básica/diaria para conseguir oro?")]
+        public bool esMisionBasica = false;
+
+        [Header("Configuración de Interacción Modular")]
+        [Tooltip("ID de la animación en el Animator (ej: 9 para regar, 2 para talar).")]
+        public int animationInteractionType;
+        [Tooltip("Nombre exacto de la herramienta en PlayerToolVisuals (ej: 'regadera', 'axe', 'escoba').")]
+        public string toolVisualName;
+        [Tooltip("Tiempo que el jugador estará bloqueado realizando la tarea.")]
+        public float interactionDuration = 3f;
+    }
 }

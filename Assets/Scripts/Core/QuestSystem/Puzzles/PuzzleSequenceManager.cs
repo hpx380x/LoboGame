@@ -3,6 +3,7 @@ using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 using Core.Enums;
+using Core.QuestSystem;
 
 /// <summary>
 /// Gestiona un puzzle de secuencia (estilo Simon Says) con velas.
@@ -10,9 +11,10 @@ using Core.Enums;
 /// </summary>
 public class PuzzleSequenceManager : NetworkBehaviour
 {
-    [Header("Configuración del Puzzle")]
-    [Tooltip("ID que debe coincidir con la misión en QuestData.")]
-    public string idPuzzleMision = "Velas";
+    [Header("Identificadores de Misión (Modular)")]
+    [Tooltip("Material considerado para avanzar la misión al resolver el puzzle.")]
+    public MaterialType materialPuzzle = MaterialType.EsenciaAntigua;
+    public ZoneID zonaPuzzle = ZoneID.Altar;
     
     [Tooltip("Lista de velas que forman parte del puzzle (mínimo 4 recomendadas).")]
     public List<PuzzleCandle> velas = new List<PuzzleCandle>();
@@ -145,7 +147,7 @@ public class PuzzleSequenceManager : NetworkBehaviour
             PlayerQuestTracker tracker = client.PlayerObject.GetComponent<PlayerQuestTracker>();
             if (tracker != null)
             {
-                tracker.IntentarAvanzarMisionServerRpc(TipoPasoMision.PuzzleSecuencia, idPuzzleMision);
+                tracker.ProcessStepServerRpc(materialPuzzle, zonaPuzzle, transform.position);
             }
         }
         

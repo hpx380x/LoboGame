@@ -42,10 +42,10 @@ public class LobbyRaycastInteraction : NetworkBehaviour
             }
         }
 
-        _gameManager = FindFirstObjectByType<GameManager>();
+        _gameManager = FindAnyObjectByType<GameManager>();
 
         if (interactionHUD == null)
-            interactionHUD = FindFirstObjectByType<LobbyInteractionUI>();
+            interactionHUD = FindAnyObjectByType<LobbyInteractionUI>();
     }
 
     private void Update()
@@ -240,3 +240,4 @@ public class LobbyRaycastInteraction : NetworkBehaviour
         }
     }
 }
+

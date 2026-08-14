@@ -11,7 +11,8 @@ Hemos construido los cimientos más difíciles de cualquier juego multijugador a
 
 ### 2. Gestión de Entidad y Cámara Locales (`NetworkPlayerSetup`)
 *   **Posesión de Cuerpos:** Solucionado el problema fantasma en el que un jugador podía controlar a todos en pantalla. Ahora, el `ThirdPersonController` de Unity detecta si eres o no el "Dueño" de la sangre del modelo a través de `IsOwner`.
-*   **Cámaras V2 Aisladas:** La cámara cinemática inyecta dinámicamente tu vista solo a *tu* esqueleto local, previniendo caos visual al unirse Clientes adicionales.
+*   **Cámaras V2 Aisladas (Auto-Healing):** [NUEVO] Implementada la inyección dinámica de `CinemachineBrain`. Si al cambiar a la escena de juego la cámara aparece "ciega", el script la repara en tiempo real y vincula la Virtual Camera al jugador local.
+*   **Restauración de Input:** [NUEVO] Corregida la pérdida de referencia del Asset de Controles en Unity 6. Los clones del jugador ahora nacen con sus controles (WASD, Mouse, Tab) correctamente vinculados.
 
 ### 3. Sincronizador de Animaciones (`PlayerAnimationSync`)
 *   Logramos sincronizar el delicado sistema de Animación del `StarterAssets`. 
@@ -20,6 +21,9 @@ Hemos construido los cimientos más difíciles de cualquier juego multijugador a
 ### 4. Inteligencia Central (`GameManager`) y Fases del Juego
 *   El `GameManager` evolucionó a una "Arca de Noé" (`DontDestroyOnLoad`). Él vigila cuándo las pantallas terminan de dibujarse para luego inyectar, de forma individual, sillas físicas a través del `SpawnManager`.
 *   **Sistema Criptográfico (ClientRpcParams):** Primer despliegue del sistema de asignación de roles. El Servidor decide que 1 jugador es Lobo y tira una carta digital que, matemáticamente, solo la Consola de la víctima puede descifrar, negando Hacks a otros jugadores.
+
+### 5. Mecánica de Lectura y UI (`ScrollController`)
+*   **Tabulado de Información:** [ESTABILIZADO] Restaurado el sistema de lectura de pergaminos. Al pulsar Tab, el jugador entra en modo lectura con animaciones sincronizadas y el cursor de Windows se libera automáticamente para permitir el cierre del menú.
 
 ---
 
@@ -47,4 +51,9 @@ Esta hoja detalla las siguientes versiones y mecánicas que hay que atacar para 
 ### [V0.5] Refinamiento de Mundo y Audio
 - [ ] Adaptación de escenarios 3D (Zonas oscuras, colisiones funcionales).
 - [ ] Audio 3D Sincronizado, fundamental para esconder pisadas del Lobo por la noche o escuchar chillidos a la distancia.
+- [ ] Integrar los Minijuegos al sistema de Tareas (Puzzles, Runas, Teclado).
+
+### [V0.6] Salud del Proyecto (Saldar Deuda Técnica)
+- [ ] **Desbloqueo del God Object**: Refactorizar y dividir el gigantesco `PlayerState.cs` en componentes modulares limpios (EJ: `PlayerInventory`, `PlayerRoleManager`).
+- [ ] **Dieta del Prefab**: Limpiar los 177 hijos estáticos dentro de `PlayerArmature`. El jugador base solo debe tener el esqueleto y las cámaras, usando *Instantiate* para cargar cosméticos o herramientas al vuelo.
 - [ ] Preparación final para Build Multi-Ordenador Local u Online (Mediante Unity Relay).

@@ -2,6 +2,8 @@ using Unity.Netcode;
 using UnityEngine;
 using Core.Enums;
 using UnityEngine.InputSystem;
+using Core.QuestSystem;
+using System.Collections.Generic;
 
 /// <summary>
 /// Permite craftear el objeto legendario (Daga) combinando materiales,
@@ -13,12 +15,20 @@ public class CraftingStation : NetworkBehaviour
     [Tooltip("La forja que debe estar activa (con humo) para poder trabajar.")]
     public ForgeController forge;
     
-    [Tooltip("ID que debe coincidir con el paso 'CrafteoSocial' en QuestData.")]
-    public string idMisionForja = "ForjarDaga"; 
+    [Header("Identificadores de Misión (Modular)")]
+    [Tooltip("Material considerado para avanzar la misión al forjar.")]
+    public MaterialType materialForjado = MaterialType.AceroSierra;
+    public ZoneID zonaForja = ZoneID.Torre;
     
-    [Header("Receta (Costs)")]
-    public int lingotesRequired = 5;
-    public int piedrasRequired = 1;
+    [System.Serializable]
+    public struct MaterialRequirement
+    {
+        public MaterialType material;
+        public int cantidad;
+    }
+
+    [Header("Receta Modular")]
+    public List<MaterialRequirement> requisitosCrafteo = new List<MaterialRequirement>();
     public TipoObjeto itemResultado = TipoObjeto.DagaCazador;
 
     private bool jugadorLocalCerca = false;
@@ -49,7 +59,7 @@ public class CraftingStation : NetworkBehaviour
             jugadorLocalCerca = false;
             invLocal = null;
             pqtLocal = null;
-            GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+            GameplayUI ui = FindAnyObjectByType<GameplayUI>();
             if (ui != null) ui.MostrarMensajeTarea("", 0f);
         }
     }
@@ -58,19 +68,32 @@ public class CraftingStation : NetworkBehaviour
     {
         if (!jugadorLocalCerca) return;
         
-        GameplayUI ui = FindFirstObjectByType<GameplayUI>();
+        GameplayUI ui = FindAnyObjectByType<GameplayUI>();
         if (ui == null) return;
 
         if (forge != null && forge.forjaActiva.Value)
         {
-             // ¿Tiene materiales?
-             if (invLocal != null && invLocal.materiales.Value.lingotes >= lingotesRequired)
+             // Validamos si tiene todos los materiales de la receta
+             bool tieneTodo = true;
+             string listaFaltante = "";
+
+             foreach(var req in requisitosCrafteo)
              {
-                 ui.MostrarMensajeTarea($"[E] Forjar {itemResultado} con {lingotesRequired} Lingotes", 0f);
+                 int count = invLocal.materiales.Value.GetCount(req.material);
+                 if (count < req.cantidad)
+                 {
+                     tieneTodo = false;
+                     listaFaltante += $"{req.cantidad - count} de {req.material}, ";
+                 }
+             }
+
+             if (tieneTodo)
+             {
+                 ui.MostrarMensajeTarea($"[E] Forjar {itemResultado}", 0f);
              }
              else
              {
-                 ui.MostrarMensajeTarea($"<color=orange>Necesitas {lingotesRequired} Lingotes para forjar.</color>", 0f);
+                 ui.MostrarMensajeTarea($"<color=orange>Falta: {listaFaltante.TrimEnd(' ', ',')}</color>", 0f);
              }
         }
         else
@@ -105,20 +128,32 @@ public class CraftingStation : NetworkBehaviour
             if (inv != null && tracker != null)
             {
                 // Validación final en el SERVIDOR (Seguridad)
-                if (inv.materiales.Value.lingotes >= lingotesRequired && 
-                    inv.materiales.Value.piedrasMagicas >= piedrasRequired)
+                bool puedeCraftear = true;
+                foreach(var req in requisitosCrafteo)
+                {
+                    if (inv.materiales.Value.GetCount(req.material) < req.cantidad)
+                    {
+                        puedeCraftear = false;
+                        break;
+                    }
+                }
+
+                if (puedeCraftear)
                 {
                     // Restar materiales
                     PlayerInventory.MaterialesMision actual = inv.materiales.Value;
-                    actual.lingotes -= lingotesRequired;
-                    actual.piedrasMagicas -= piedrasRequired;
+                    foreach(var req in requisitosCrafteo)
+                    {
+                        int nuevoTotal = actual.GetCount(req.material) - req.cantidad;
+                        actual.SetCount(req.material, nuevoTotal);
+                    }
                     inv.materiales.Value = actual;
 
                     // Otorgar el objeto físico
                     inv.objetoEnMano.Value = itemResultado;
 
-                    // Avanzar la misión de crafteo
-                    tracker.IntentarAvanzarMisionServerRpc(TipoPasoMision.CrafteoSocial, idMisionForja);
+                    // Avanzar la misión de crafteo (Usando el nuevo sistema modular)
+                    tracker.ProcessStepServerRpc(materialForjado, zonaForja, transform.position);
                     
                     Debug.Log($"[Servidor] Jugador {clientId} ha forjado {itemResultado} correctamente.");
                 }
@@ -130,3 +165,4 @@ public class CraftingStation : NetworkBehaviour
         }
     }
 }
+

@@ -5,12 +5,10 @@ using Core.Enums;
 
 /// <summary>
 /// Módulo de Economía Híbrida: La tienda del Mercader (Ruta Segura).
-/// Obliga a los jugadores que farmean tareas de 1 Oro a reunirse aquí
-/// para gastar su dinero. Al ser un lugar predecible, el Lobo puede armar emboscadas.
 /// </summary>
 public class ShopInteract : MonoBehaviour
 {
-    [Header("Configuraci\u00f3n de la Tienda")]
+    [Header("Configuración de la Tienda")]
     [Tooltip("El objeto que vende este puesto/cofre.")]
     public TipoObjeto objetoVendido = TipoObjeto.PocionVelocidad;
     [Tooltip("Precio en Monedas/Oro.")]
@@ -22,6 +20,14 @@ public class ShopInteract : MonoBehaviour
 
     private bool jugadorCerca = false;
     private PlayerState psLocal;
+
+    // ── Caché: se resuelve una sola vez en Start ──────────────────────
+    private GameplayUI cachedUI;
+
+    private void Start()
+    {
+        cachedUI = Object.FindAnyObjectByType<GameplayUI>();
+    }
 
     private void OnTriggerEnter(Collider other)
     {
@@ -35,18 +41,13 @@ public class ShopInteract : MonoBehaviour
 
         jugadorCerca = true;
 
-        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-        if (ui != null)
+        if (cachedUI != null)
         {
             PlayerInventory inv = psLocal.GetComponent<PlayerInventory>();
             if (inv != null && inv.monedas.Value >= costeMonedas)
-            {
-                ui.MostrarMensajeTarea($"[E] Comprar {nombreMostrado} ({costeMonedas} Oro)", 0f);
-            }
+                cachedUI.MostrarMensajeTarea($"[E] Comprar {nombreMostrado} ({costeMonedas} Oro)", 0f);
             else
-            {
-                ui.MostrarMensajeTarea($"Necesitas {costeMonedas} Oro para {nombreMostrado}.", 0f);
-            }
+                cachedUI.MostrarMensajeTarea($"Necesitas {costeMonedas} Oro para {nombreMostrado}.", 0f);
         }
     }
 
@@ -58,13 +59,10 @@ public class ShopInteract : MonoBehaviour
         if (netObj == null || !netObj.IsOwner) return;
 
         jugadorCerca = false;
-        psLocal = null;
+        psLocal      = null;
 
-        GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
-        if (ui != null)
-        {
-            ui.MostrarMensajeTarea("", 0f);
-        }
+        if (cachedUI != null)
+            cachedUI.MostrarMensajeTarea("", 0f);
     }
 
     private void Update()
@@ -74,22 +72,16 @@ public class ShopInteract : MonoBehaviour
 
         if (Keyboard.current.eKey.wasPressedThisFrame)
         {
-            GameplayUI ui = Object.FindFirstObjectByType<GameplayUI>();
             PlayerInventory inv = psLocal.GetComponent<PlayerInventory>();
             if (inv != null && inv.monedas.Value >= costeMonedas)
             {
-                // Enviar la petición de compra segura al servidor
                 inv.ComprarObjetoServerRpc(objetoVendido, costeMonedas);
-                
-                if (ui != null) 
-                    ui.MostrarMensajeTarea($"¡Compraste {nombreMostrado}!", 2f);
-                
-                jugadorCerca = false; // Desactivar temporalmente para que no spammee
+                if (cachedUI != null) cachedUI.MostrarMensajeTarea($"¡Compraste {nombreMostrado}!", 2f);
+                jugadorCerca = false;
             }
             else
             {
-                if (ui != null) 
-                    ui.MostrarMensajeTarea($"<color=red>No tienes suficiente Oro.</color>", 2f);
+                if (cachedUI != null) cachedUI.MostrarMensajeTarea($"<color=red>No tienes suficiente Oro.</color>", 2f);
             }
         }
     }

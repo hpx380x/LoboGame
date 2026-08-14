@@ -31,6 +31,8 @@ public class LobbyUI : MonoBehaviour
     [SerializeField] private Button settingsButton;
     [Tooltip("Si se marca, la partida no saldrá en el Navegador de Servidores")]
     [SerializeField] private Toggle privateGameToggle;
+    [Tooltip("Campo para escribir tu nombre antes de entrar")]
+    [SerializeField] private TMP_InputField nicknameInputField;
 
     [Header("Join Panel & Server Browser")]
     [SerializeField] private GameObject joinPanel;
@@ -75,7 +77,7 @@ public class LobbyUI : MonoBehaviour
     private void Awake()
     {
         if (networkManager == null)
-            networkManager = FindFirstObjectByType<NetworkManager>();
+            networkManager = FindAnyObjectByType<NetworkManager>();
     }
 
     private void Update()
@@ -113,6 +115,19 @@ public class LobbyUI : MonoBehaviour
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
 
+        // Cargar nickname guardado
+        string currentNick = GetSavedNickname();
+        if (nicknameInputField != null)
+        {
+            nicknameInputField.text = currentNick;
+            nicknameInputField.onValueChanged.AddListener((val) => {
+                string nameToSave = val.Trim();
+                if (nameToSave.Length > 25) nameToSave = nameToSave.Substring(0, 25);
+                PlayerPrefs.SetString("PlayerNickname", nameToSave);
+                PlayerPrefs.Save();
+            });
+        }
+
         if (hostButton != null) hostButton.onClick.AddListener(OnHostButtonClicked);
         if (clientButton != null) clientButton.onClick.AddListener(MostrarJoinPanel);
         if (quitButton != null) quitButton.onClick.AddListener(QuitGame);
@@ -146,6 +161,10 @@ public class LobbyUI : MonoBehaviour
         if (networkManager != null)
         {
             networkManager.OnClientDisconnectCallback += OnClientDisconnect;
+
+            // [FIX] Habilitar la validación de conexión para evitar que se autospawnee el PlayerArmature en el Lobby
+            networkManager.NetworkConfig.ConnectionApproval = true;
+            networkManager.ConnectionApprovalCallback = ApprovalCheck;
         }
 
         // --- CONEXIÓN A UNITY CLOUD (SOPORTE PARRELSYNC) ---
@@ -233,6 +252,10 @@ public class LobbyUI : MonoBehaviour
             networkManager.GetComponent<UnityTransport>().SetHostRelayData(
                 hostIP, hostPort, allocation.AllocationIdBytes, allocation.Key, allocation.ConnectionData, isSecure
             );
+
+            // [NUEVO] Registrar payload de nickname para el Host
+            string nick = GetSavedNickname();
+            networkManager.NetworkConfig.ConnectionData = System.Text.Encoding.UTF8.GetBytes(nick);
 
             // 4. Arrancamos Primero el Servidor real en el internet
             // Evitamos el error rojo de "Cannot start host while an instance is already running"
@@ -338,6 +361,10 @@ public class LobbyUI : MonoBehaviour
             networkManager.GetComponent<UnityTransport>().SetClientRelayData(
                 clientIP, clientPort, joinAllocation.AllocationIdBytes, joinAllocation.Key, joinAllocation.ConnectionData, joinAllocation.HostConnectionData, isSecure
             );
+
+            // [NUEVO] Registrar payload de nickname para el Cliente
+            string nick = GetSavedNickname();
+            networkManager.NetworkConfig.ConnectionData = System.Text.Encoding.UTF8.GetBytes(nick);
 
             bool success = networkManager.StartClient();
             
@@ -587,4 +614,68 @@ public class LobbyUI : MonoBehaviour
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
     }
+
+    private void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+    {
+        response.Approved = true;
+        response.CreatePlayerObject = false; // Desactivar la creación automática del Player Object de Netcode en el Lobby
+        response.Pending = false;
+
+        string nickname = "Jugador";
+        if (request.Payload != null && request.Payload.Length > 0)
+        {
+            try
+            {
+                nickname = System.Text.Encoding.UTF8.GetString(request.Payload);
+                nickname = nickname.Trim();
+                if (nickname.Length > 25) nickname = nickname.Substring(0, 25);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[LobbyUI] Error al decodificar nickname del payload: {ex.Message}");
+            }
+        }
+        else
+        {
+            if (request.ClientNetworkId == NetworkManager.ServerClientId)
+            {
+                nickname = GetSavedNickname();
+            }
+            else
+            {
+                nickname = $"Jugador_{request.ClientNetworkId}";
+            }
+        }
+
+        if (gameManager != null)
+        {
+            gameManager.RegistrarNicknameCliente(request.ClientNetworkId, nickname);
+        }
+    }
+
+    private string GetSavedNickname()
+    {
+        if (nicknameInputField != null && !string.IsNullOrEmpty(nicknameInputField.text))
+        {
+            string cleanName = nicknameInputField.text.Trim();
+            if (cleanName.Length > 25) cleanName = cleanName.Substring(0, 25);
+            PlayerPrefs.SetString("PlayerNickname", cleanName);
+            PlayerPrefs.Save();
+            return cleanName;
+        }
+
+        string savedName = PlayerPrefs.GetString("PlayerNickname", "");
+        if (!string.IsNullOrEmpty(savedName))
+        {
+            return savedName;
+        }
+
+        // Si no hay nada, generamos uno por defecto aleatorio
+        int rand = Random.Range(100, 999);
+        string defaultName = $"Jugador_{rand}";
+        PlayerPrefs.SetString("PlayerNickname", defaultName);
+        PlayerPrefs.Save();
+        return defaultName;
+    }
 }
+

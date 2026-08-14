@@ -39,6 +39,21 @@ public class VotingUI : MonoBehaviour
     {
         asambleaActiva = true;
 
+        if (Unity.Netcode.NetworkManager.Singleton.LocalClient != null && Unity.Netcode.NetworkManager.Singleton.LocalClient.PlayerObject != null)
+        {
+            var tpc = Unity.Netcode.NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.ThirdPersonController>();
+            if (tpc != null) tpc.CanMove = false;
+
+            var inputs = Unity.Netcode.NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.StarterAssetsInputs>();
+            if (inputs != null) 
+            {
+                inputs.cursorLocked = false;
+                inputs.cursorInputForLook = false;
+            }
+        }
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
         // 1. Limpiar los botones de asambleas anteriores
         foreach (var btnObj in botonesActivos)
         {
@@ -50,7 +65,7 @@ public class VotingUI : MonoBehaviour
 
         // [MÉTODO INFALIBLE] Buscar a todos los jugadores por su componente físico (PlayerState) en la escena.
         // Esto ignora las listas secretas de Netcode y simplemente usa los ojos de Unity para ubicar los personajes.
-        PlayerState[] todosLosJugadores = Object.FindObjectsByType<PlayerState>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        PlayerState[] todosLosJugadores = Object.FindObjectsByType<PlayerState>(FindObjectsInactive.Exclude);
 
         // 2. Averiguar si yo ("LocalPlayer") estoy muerto (los fantasmas no pueden votar)
         bool soyFantasma = true;
@@ -78,10 +93,11 @@ public class VotingUI : MonoBehaviour
                 Text texto = nuevoBotonObj.GetComponentInChildren<Text>();
                 
                 ulong idDestino = estado.OwnerClientId;
+                string pName = estado.playerName.Value.ToString().TrimEnd('\0');
 
                 if (texto != null)
                 {
-                    texto.text = $"Expulsar al Jugador {idDestino}";
+                    texto.text = $"Expulsar a: {pName}";
                 }
 
                 // Regla 1: Fantasmas miran pero no tocan.
@@ -155,7 +171,7 @@ public class VotingUI : MonoBehaviour
         // ¡Táctica de Red Definitiva!
         // En vez de rogarle a GameManager que entregue nuestro voto...
         // ...usamos TÚ CUERPO físico en red, que tiene tu Autoridad 100% indiscutible:
-        PlayerState[] todosLosEstados = Object.FindObjectsByType<PlayerState>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        PlayerState[] todosLosEstados = Object.FindObjectsByType<PlayerState>(FindObjectsInactive.Exclude);
         
         foreach (PlayerState p in todosLosEstados)
         {
@@ -175,5 +191,21 @@ public class VotingUI : MonoBehaviour
         {
             panelVotacion.SetActive(false);
         }
+
+        if (Unity.Netcode.NetworkManager.Singleton != null && Unity.Netcode.NetworkManager.Singleton.LocalClient != null && Unity.Netcode.NetworkManager.Singleton.LocalClient.PlayerObject != null)
+        {
+            var tpc = Unity.Netcode.NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.ThirdPersonController>();
+            if (tpc != null) tpc.CanMove = true;
+
+            var inputs = Unity.Netcode.NetworkManager.Singleton.LocalClient.PlayerObject.GetComponent<StarterAssets.StarterAssetsInputs>();
+            if (inputs != null) 
+            {
+                inputs.cursorLocked = true;
+                inputs.cursorInputForLook = true;
+            }
+        }
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 }
+

@@ -2,6 +2,7 @@ using UnityEngine;
 using TMPro;
 using System.Collections;
 using System.Collections.Generic;
+using Core.QuestSystem;
 
 /// <summary>
 /// HUD de gameplay. Gestiona:
@@ -47,19 +48,97 @@ public class GameplayUI : MonoBehaviour
     [SerializeField] private GameObject panelEspectador;
     [SerializeField] private TextMeshProUGUI textoNombreEspectador;
     
+    [Header("Minijuego de Timing")]
+    [SerializeField] private GameObject contenedorTiming;
+    [SerializeField] private UnityEngine.UI.Slider sliderTiming;
+    [SerializeField] private RectTransform zonaVerdeRect;
+
     private bool isScrollOpen = false;
 
     // ─── Estado interno ───────────────────────────────────────────────────────
 
-    // Lista de tareas del día actual (privada, se recibe del servidor)
-    private List<TaskInfo> tareasActuales = new List<TaskInfo>();
-
-    // ID de la tarea en la que el jugador está bloqueado (null = libre)
-    private string tareaActivaId = null;
-
     private bool esLobo = false;
     private Coroutine corutinaProximidad;
     private Coroutine corutinaRol;
+
+    // --- Referencias al Jugador Local ---
+    private PlayerInventory localInventory;
+    private PlayerQuestTracker localQuestTracker;
+
+    public void VincularJugadorLocal(GameObject player)
+    {
+        // Limpiamos suscripciones viejas por si acaso
+        DesvincularJugadorLocal();
+
+        localInventory = player.GetComponent<PlayerInventory>();
+        localQuestTracker = player.GetComponent<Core.QuestSystem.PlayerQuestTracker>();
+
+        // [FIX] Leer el rol directamente desde PlayerState para no depender del orden
+        // de llegada de MostrarRol() vs VincularJugadorLocal().
+        // MostrarRol() puede dispararse ANTES de que el tracker esté listo,
+        // causando que el dibujo inicial no muestre la misión.
+        PlayerState ps = player.GetComponent<PlayerState>();
+        if (ps != null)
+        {
+            esLobo = ps.isWolf.Value;
+        }
+
+        if (localQuestTracker != null)
+        {
+            localQuestTracker.OnQuestUpdated += OnQuestUpdated;
+            localQuestTracker.OnQuestCompleted += OnQuestCompleted;
+
+            // Si ya hay una misión asignada ANTES de que la UI existiera (ej. misión asignada
+            // en el mismo frame del spawn), la cargamos manualmente para no perder el evento.
+            string questIDActual = localQuestTracker.currentQuestID.Value.ToString();
+            if (!string.IsNullOrEmpty(questIDActual) && Core.QuestSystem.QuestManager.Instance != null)
+            {
+                localQuestTracker.ForzarActualizacionUI();
+            }
+        }
+
+        if (localInventory != null)
+        {
+            localInventory.materiales.OnValueChanged += OnMaterialesCambiados;
+        }
+
+        // [FIX] Forzar redibujo DESPUÉS de vincular el tracker y leer el rol correcto.
+        // Esto garantiza que tanto la misión como el objetivo del lobo aparezcan juntos.
+        RedibujarListaTareas();
+    }
+
+    private void DesvincularJugadorLocal()
+    {
+        if (localQuestTracker != null)
+        {
+            localQuestTracker.OnQuestUpdated -= OnQuestUpdated;
+            localQuestTracker.OnQuestCompleted -= OnQuestCompleted;
+        }
+        if (localInventory != null)
+        {
+            localInventory.materiales.OnValueChanged -= OnMaterialesCambiados;
+        }
+    }
+
+    private void OnQuestUpdated(Core.QuestSystem.QuestData quest)
+    {
+        RedibujarListaTareas();
+    }
+
+    private void OnQuestCompleted()
+    {
+        RedibujarListaTareas();
+    }
+
+    private void OnMaterialesCambiados(PlayerInventory.MaterialesMision anterior, PlayerInventory.MaterialesMision nuevo)
+    {
+        RedibujarListaTareas();
+    }
+
+    private void OnDestroy()
+    {
+        DesvincularJugadorLocal();
+    }
 
     private void Awake()
     {
@@ -72,44 +151,41 @@ public class GameplayUI : MonoBehaviour
         {
             panelEspectador.SetActive(false);
         }
+
+        InicializarTimingBarDinamica();
     }
 
     public void ToggleScroll(bool forceState)
     {
+        // Si no hay pergamino en el HUD (fue eliminado), ignorar silenciosamente
+        if (pergaminoHudRoot == null)
+        {
+            isScrollOpen = false;
+            return;
+        }
+
         isScrollOpen = forceState;
         Debug.Log($"[PergaminoLog-UI] Recibiendo ToggleScroll de Cliente. Estado deseado: {forceState}");
         
-        if (pergaminoHudRoot != null)
+        if (isScrollOpen) 
         {
-            if (isScrollOpen) 
-            {
-                pergaminoHudRoot.SetActive(true);
-                Debug.Log("[PergaminoLog-UI] Activando contenedor Raíz del pergamino en la UI.");
-            }
-            
-            if (scroll3DAnimator != null)
-            {
-                // Disparamos la animación del modelo 3D
-                scroll3DAnimator.SetBool("isOpen", isScrollOpen);
-                Debug.Log($"[PergaminoLog-UI] Disparando flecha del Animator a isOpen={isScrollOpen}");
-            }
-            else
-            {
-                Debug.LogWarning("[PergaminoLog-UI] ¡Falta Animator! No se asignó scroll3DAnimator en el Inspector de GameplayUI.");
-            }
-
-            // Si cerramos, desactivamos tras un breve delay 
-            if (!isScrollOpen) 
-            {
-                Debug.Log("[PergaminoLog-UI] Cerrando... Iniciando corutina para apagar la malla en 0.5s.");
-                StartCoroutine(OcultarScrollRutina());
-            }
+            pergaminoHudRoot.SetActive(true);
+            Debug.Log("[PergaminoLog-UI] Activando contenedor Raíz del pergamino en la UI.");
         }
-        else
+        
+        if (scroll3DAnimator != null)
         {
-            Debug.LogError("[PergaminoLog-UI] ¡ERROR CRÍTICO! pergaminoHudRoot es nulo. ¡Asígnalo en el Inspector!");
+            scroll3DAnimator.SetBool("isOpen", isScrollOpen);
+            Debug.Log($"[PergaminoLog-UI] Disparando flecha del Animator a isOpen={isScrollOpen}");
+        }
+
+        // Si cerramos, desactivamos tras un breve delay 
+        if (!isScrollOpen) 
+        {
+            StartCoroutine(OcultarScrollRutina());
         }
     }
+
 
     private IEnumerator OcultarScrollRutina()
     {
@@ -126,6 +202,11 @@ public class GameplayUI : MonoBehaviour
         if (textoRol == null) return;
         textoRol.text = rol;
         textoRol.gameObject.SetActive(true);
+
+        // [NUEVO] Actualizar la variable interna esLobo ya que ahora no dependemos de las tareas antiguas
+        esLobo = rol.Contains("LOBO");
+        RedibujarListaTareas();
+
         if (corutinaRol != null) StopCoroutine(corutinaRol);
         corutinaRol = StartCoroutine(OcultarRolRutina());
     }
@@ -136,104 +217,6 @@ public class GameplayUI : MonoBehaviour
         if (textoRol != null) textoRol.gameObject.SetActive(false);
     }
 
-    // ─── API: Lista de Tareas ─────────────────────────────────────────────────
-
-    /// <summary>
-    /// Llamado por la ClientRpc del GameManager cuando el servidor asigna las tareas del día.
-    /// Recibe 2 tareas disponibles; el jugador elige cuál empezar primero.
-    /// El lobo también recibe tareas reales (para camuflarse).
-    /// </summary>
-    public void ActualizarListaTareas(List<TaskInfo> tareas, bool jugadorEsLobo)
-    {
-        tareasActuales = tareas;
-        tareaActivaId  = null;   // Liberar cualquier bloqueo anterior
-        esLobo         = jugadorEsLobo;
-
-        if (taskPanel != null) taskPanel.SetActive(true);
-        RedibujarListaTareas();
-    }
-
-    /// <summary>Devuelve si una tarea ya está terminada (completada O fallada).</summary>
-    public bool TareaEstaTerminada(string taskId)
-    {
-        TaskInfo t = tareasActuales.Find(x => x.taskId == taskId);
-        return t != null && t.EstaTerminada;
-    }
-
-    // ─── API: Bloqueo de tarea activa ─────────────────────────────────────────
-
-    /// <summary>El TaskPoint llama esto al empezar un minijuego. Bloquea otras tareas.</summary>
-    public void SetTareaActiva(string taskId)
-    {
-        tareaActivaId = taskId;
-
-        TaskInfo t = tareasActuales.Find(x => x.taskId == taskId);
-        if (t != null) t.estado = EstadoTarea.EnProgreso;
-
-        RedibujarListaTareas();
-    }
-
-    /// <summary>El ID de la tarea actualmente bloqueada (null si ninguna).</summary>
-    public string GetTareaActivaId() => tareaActivaId;
-
-    /// <summary>
-    /// El jugador completó la tarea activa.
-    /// Marca como Completada y avanza automáticamente a la siguiente Disponible.
-    /// </summary>
-    public void CompletarTareaActiva(string taskId)
-    {
-        TaskInfo t = tareasActuales.Find(x => x.taskId == taskId);
-        if (t != null) t.estado = EstadoTarea.Completada;
-
-        tareaActivaId = null;
-        RedibujarListaTareas();
-
-        MostrarMensajeTarea($"<color=green>✓ '{t?.nombreTarea}' completada.</color>", 3f);
-
-        AvanzarSiguienteTareaDisponible();
-    }
-
-    /// <summary>
-    /// El jugador falló la tarea activa (se alejó en progreso).
-    /// Marca como Fallada y avanza a la siguiente Disponible, si la hay.
-    /// </summary>
-    public void FallarTareaActiva(string taskId, string motivo)
-    {
-        TaskInfo t = tareasActuales.Find(x => x.taskId == taskId);
-        if (t != null) t.estado = EstadoTarea.Fallada;
-
-        tareaActivaId = null;
-        RedibujarListaTareas();
-
-        MostrarMensajeTarea($"<color=red>✗ {motivo}</color>", 3f);
-
-        AvanzarSiguienteTareaDisponible();
-    }
-
-    // ─── Lógica interna de avance ─────────────────────────────────────────────
-
-    /// <summary>
-    /// Tras completar/fallar, busca la próxima tarea Disponible y la resalta en amarillo.
-    /// Si no queda ninguna, muestra el mensaje de fin de turno.
-    /// </summary>
-    private void AvanzarSiguienteTareaDisponible()
-    {
-        TaskInfo siguiente = tareasActuales.Find(x => x.EstaDisponible);
-        if (siguiente != null)
-        {
-            // Resaltar la siguiente en la lista – el TaskPoint ya tiene el tint dorado por su propia lógica.
-            MostrarMensajeTarea($"<color=yellow>Siguiente tarea: {siguiente.nombreTarea}</color>", 3f);
-        }
-        else
-        {
-            // Sin tareas restantes para este turno
-            bool alguienCompletada = tareasActuales.Exists(x => x.estado == EstadoTarea.Completada);
-            string mensajeFinal = alguienCompletada
-                ? "<color=green>¡Turno completado! Buen trabajo.</color>"
-                : "<color=orange>Sin tareas completadas. Mañana tendrás nuevas tareas.</color>";
-            MostrarMensajeTarea(mensajeFinal, 5f);
-        }
-    }
 
     // ─── Dibujar lista ────────────────────────────────────────────────────────
 
@@ -243,27 +226,60 @@ public class GameplayUI : MonoBehaviour
 
         var sb = new System.Text.StringBuilder();
 
-        if (esLobo)
-            sb.AppendLine("<color=red><s>SIMULAR TAREAS:</s></color>");
-        else
-            sb.AppendLine("<color=yellow>MIS TAREAS HOY:</color>");
-
-        foreach (var t in tareasActuales)
+        // 1. MISIÓN ACTIVA (Sistema QuestSystem)
+        if (localQuestTracker != null && !string.IsNullOrEmpty(localQuestTracker.currentQuestID.Value.ToString().TrimEnd('\0')))
         {
-            switch (t.estado)
+            if (esLobo)
+                sb.AppendLine("\n<color=red><s>SIMULAR MISIÓN:</s></color>");
+            else
+                sb.AppendLine("\n<color=orange>MISIÓN ACTIVA:</color>");
+                
+            string questActual = localQuestTracker.currentQuestID.Value.ToString().TrimEnd('\0');
+            Core.QuestSystem.QuestData activeQuest = Core.QuestSystem.QuestManager.Instance?.GetQuestByID(questActual);
+            if (activeQuest != null)
             {
-                case EstadoTarea.Disponible:
-                    sb.AppendLine($"  ☐ {t.nombreTarea}");
-                    break;
-                case EstadoTarea.EnProgreso:
-                    sb.AppendLine($"  <color=yellow>⟳ {t.nombreTarea} (en progreso...)</color>");
-                    break;
-                case EstadoTarea.Completada:
-                    sb.AppendLine($"  <color=green>✓ <s>{t.nombreTarea}</s></color>");
-                    break;
-                case EstadoTarea.Fallada:
-                    sb.AppendLine($"  <color=red>✗ <s>{t.nombreTarea}</s></color>");
-                    break;
+                sb.AppendLine($"<b>{activeQuest.nombreMision}</b>");
+                int currentStep = localQuestTracker.currentStepIndex.Value;
+                for (int i = 0; i < activeQuest.pasos.Count; i++)
+                {
+                    var paso = activeQuest.pasos[i];
+                    if (i < currentStep)
+                    {
+                        sb.AppendLine($"  <color=green>✓ <s>{paso.descripcion}</s></color>");
+                    }
+                    else if (i == currentStep)
+                    {
+                        sb.AppendLine($"  <color=yellow>⟳ {paso.descripcion} ({paso.zonaRequerida})</color>");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"  [ ] {paso.descripcion}");
+                    }
+                }
+            }
+        }
+
+        // 3. MATERIALES RECOGIDOS
+        if (!esLobo && localInventory != null)
+        {
+            bool tieneMateriales = false;
+            PlayerInventory.MaterialesMision mats = localInventory.materiales.Value;
+            
+            // Recorrer los posibles materiales y pintar los que tengan cantidad > 0
+            foreach (Core.Enums.MaterialType type in System.Enum.GetValues(typeof(Core.Enums.MaterialType)))
+            {
+                if (type == Core.Enums.MaterialType.Ninguno || type == Core.Enums.MaterialType.Cualquiera) continue;
+                
+                int count = mats.GetCount(type);
+                if (count > 0)
+                {
+                    if (!tieneMateriales)
+                    {
+                        sb.AppendLine("\n<color=#00FFCC>MATERIALES RECOGIDOS:</color>");
+                        tieneMateriales = true;
+                    }
+                    sb.AppendLine($"  • {type}: {count}");
+                }
             }
         }
 
@@ -371,6 +387,98 @@ public class GameplayUI : MonoBehaviour
             {
                 textoNombreEspectador.text = $"Viendo a: <color=#FFD700>{nombre}</color>";
             }
+        }
+    }
+
+    // ─── Minijuego de Timing (Afilar) ─────────────────────────────────────────
+
+    private void InicializarTimingBarDinamica()
+    {
+        if (contenedorTiming != null) return;
+
+        // Buscar el Canvas principal
+        Canvas canvas = GetComponentInParent<Canvas>();
+        if (canvas == null) canvas = FindAnyObjectByType<Canvas>();
+        if (canvas == null) return;
+
+        // Crear contenedor principal de la barra de timing
+        GameObject goCont = new GameObject("ContenedorTimingBar", typeof(RectTransform));
+        goCont.transform.SetParent(canvas.transform, false);
+        contenedorTiming = goCont;
+
+        RectTransform rtCont = goCont.GetComponent<RectTransform>();
+        rtCont.anchorMin = new Vector2(0.5f, 0.28f); // Abajo, arriba del prompt
+        rtCont.anchorMax = new Vector2(0.5f, 0.28f);
+        rtCont.pivot = new Vector2(0.5f, 0.5f);
+        rtCont.sizeDelta = new Vector2(300f, 25f);
+
+        // Añadir fondo semi-transparente negro (Glassmorphism)
+        var imgBg = goCont.AddComponent<UnityEngine.UI.Image>();
+        imgBg.color = new Color(0f, 0f, 0f, 0.7f);
+
+        // Crear la zona verde
+        GameObject goGreen = new GameObject("ZonaVerde", typeof(RectTransform));
+        goGreen.transform.SetParent(goCont.transform, false);
+        zonaVerdeRect = goGreen.GetComponent<RectTransform>();
+        var imgGreen = goGreen.AddComponent<UnityEngine.UI.Image>();
+        imgGreen.color = new Color(0.2f, 0.8f, 0.3f, 0.85f); // Verde
+
+        // Crear la barra slider
+        GameObject goSlider = new GameObject("SliderTiming", typeof(RectTransform), typeof(UnityEngine.UI.Slider));
+        goSlider.transform.SetParent(goCont.transform, false);
+        sliderTiming = goSlider.GetComponent<UnityEngine.UI.Slider>();
+        
+        RectTransform rtSlider = goSlider.GetComponent<RectTransform>();
+        rtSlider.anchorMin = Vector2.zero;
+        rtSlider.anchorMax = Vector2.one;
+        rtSlider.sizeDelta = Vector2.zero;
+
+        // Crear el puntero (el palo vertical en medio)
+        GameObject goPointer = new GameObject("Puntero", typeof(RectTransform));
+        goPointer.transform.SetParent(goSlider.transform, false);
+        var imgPointer = goPointer.AddComponent<UnityEngine.UI.Image>();
+        imgPointer.color = Color.white;
+
+        RectTransform rtPointer = goPointer.GetComponent<RectTransform>();
+        rtPointer.anchorMin = new Vector2(0.5f, 0f);
+        rtPointer.anchorMax = new Vector2(0.5f, 1f);
+        rtPointer.sizeDelta = new Vector2(6f, 10f); // Palo vertical blanco
+
+        sliderTiming.targetGraphic = imgBg;
+        sliderTiming.handleRect = rtPointer;
+        sliderTiming.minValue = 0f;
+        sliderTiming.maxValue = 1f;
+        sliderTiming.value = 0f;
+        sliderTiming.interactable = false;
+
+        // Ocultar por defecto
+        contenedorTiming.SetActive(false);
+    }
+
+    public void MostrarTimingBar(bool mostrar, float targetMin, float targetMax)
+    {
+        InicializarTimingBarDinamica();
+
+        if (contenedorTiming != null)
+        {
+            contenedorTiming.SetActive(mostrar);
+        }
+
+        if (mostrar && zonaVerdeRect != null)
+        {
+            // Ajustar los anclajes de la zona verde
+            zonaVerdeRect.anchorMin = new Vector2(targetMin, 0f);
+            zonaVerdeRect.anchorMax = new Vector2(targetMax, 1f);
+            zonaVerdeRect.offsetMin = Vector2.zero;
+            zonaVerdeRect.offsetMax = Vector2.zero;
+        }
+    }
+
+    public void ActualizarTimingBar(float valor)
+    {
+        if (sliderTiming != null)
+        {
+            sliderTiming.value = valor;
         }
     }
 }

@@ -1,10 +1,14 @@
 using UnityEngine;
+using Unity.Netcode;
 
 // [Mecánica: Manzana de Oro]
 public class WardContraLobo : MonoBehaviour
 {
     private void OnTriggerStay(Collider other)
     {
+        // El servidor gestiona el trigger
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
+
         // Buscamos si el objeto que acaba de entrar (o se intenta quedar) es un jugador
         PlayerState ps = other.GetComponentInParent<PlayerState>();
         
@@ -16,8 +20,12 @@ public class WardContraLobo : MonoBehaviour
             Vector3 pushDirection = (ps.transform.position - transform.position).normalized;
             pushDirection.y = 0; // Evitamos lanzarlo por los aires
             
-            // Moverlo hacia atrás 2 metros abruptamente para simular choque de pared
-            ps.transform.position += pushDirection * 0.15f; // Lo aplicamos constantemente en Stay para que sea como un muro sólido
+            // Moverlo hacia atrás 0.15 metros localmente en su cliente de forma autoritativa
+            ClientRpcParams rpcParams = new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams { TargetClientIds = new ulong[] { ps.OwnerClientId } }
+            };
+            ps.RepelerJugadorClientRpc(pushDirection * 0.15f, rpcParams);
         }
     }
 }

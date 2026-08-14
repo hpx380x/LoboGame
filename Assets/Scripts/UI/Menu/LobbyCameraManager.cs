@@ -36,7 +36,7 @@ public class LobbyCameraManager : MonoBehaviour
     {
         // Buscamos la cámara principal si no está asignada en el inspector
         if (_camPrincipal == null) _camPrincipal = Camera.main;
-        if (_camPrincipal == null) _camPrincipal = FindFirstObjectByType<Camera>();
+        if (_camPrincipal == null) _camPrincipal = FindAnyObjectByType<Camera>();
     }
 
     private void Start()
@@ -161,3 +161,4 @@ public class LobbyCameraManager : MonoBehaviour
         _transicionActiva = null;
     }
 }
+
