@@ -20,7 +20,7 @@ public class AutomatedLobbyUIFix
         bool sceneDirty = false;
 
         // 1. Revisar si hay un EventSystem (Sin esto los botones no existen para el ratón)
-        EventSystem evtSystem = Object.FindFirstObjectByType<EventSystem>();
+        EventSystem evtSystem = Object.FindAnyObjectByType<EventSystem>();
         if (evtSystem == null)
         {
             GameObject evtObj = new GameObject("EventSystem");
@@ -63,7 +63,7 @@ public class AutomatedLobbyUIFix
         }
 
         // 3. Revisar si se rompieron las asignaciones de referencias en tu LobbyUI.cs
-        LobbyUI lobbyCode = Object.FindFirstObjectByType<LobbyUI>();
+        LobbyUI lobbyCode = Object.FindAnyObjectByType<LobbyUI>();
         if (lobbyCode != null)
         {
             SerializedObject so = new SerializedObject(lobbyCode);
@@ -81,7 +81,7 @@ public class AutomatedLobbyUIFix
             if (nmProp != null && nmProp.objectReferenceValue == null)
             {
                 // Autoarrastramos el NetworkManager si se perdió
-                Unity.Netcode.NetworkManager nm = Object.FindFirstObjectByType<Unity.Netcode.NetworkManager>();
+                Unity.Netcode.NetworkManager nm = Object.FindAnyObjectByType<Unity.Netcode.NetworkManager>();
                 if (nm != null)
                 {
                     nmProp.objectReferenceValue = nm;
@@ -102,3 +102,4 @@ public class AutomatedLobbyUIFix
         System.IO.File.WriteAllText(markerPath, "Done");
     }
 }
+

@@ -31,8 +31,7 @@ public class FixPlayerInventoryPrefab
                     (TipoObjeto.Antorcha, "Antorcha"),
                     (TipoObjeto.DagaCazador, "Daga"),
                     (TipoObjeto.PocionVelocidad, "PocionVelocidad"),
-                    (TipoObjeto.PocionMuerte, "PocionMuerte"),
-                    (TipoObjeto.PocionVida, "PocionRevivir"),
+                    (TipoObjeto.Pocion, "PocionRevivir"),
                     (TipoObjeto.BombaApestosa, "BombaApestosa"),
                     (TipoObjeto.LupaHuella, "Lupa"),
                     (TipoObjeto.ManzanaOro, "Manzanadeoro")

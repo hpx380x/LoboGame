@@ -21,8 +21,8 @@ public class AutomatedDelayedSpawnModifier
         bool sceneDirty = false;
 
         // 1. Encontrar el NetworkManager y el GameManager
-        NetworkManager netManager = Object.FindFirstObjectByType<NetworkManager>();
-        GameManager gameManager = Object.FindFirstObjectByType<GameManager>();
+        NetworkManager netManager = Object.FindAnyObjectByType<NetworkManager>();
+        GameManager gameManager = Object.FindAnyObjectByType<GameManager>();
 
         if (netManager != null && gameManager != null)
         {
@@ -77,3 +77,4 @@ public class AutomatedDelayedSpawnModifier
         System.IO.File.WriteAllText(markerPath, "Completado");
     }
 }
+

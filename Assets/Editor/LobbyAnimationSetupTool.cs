@@ -125,7 +125,7 @@ public class LobbyAnimationSetupTool : EditorWindow
         // Limpia la lista de nulls
         _randomClips.RemoveAll(c => c == null);
 
-        var componentes = FindObjectsByType<RandomLobbySit>(FindObjectsSortMode.None);
+        var componentes = FindObjectsByType<RandomLobbySit>(FindObjectsInactive.Exclude);
         int count = 0;
 
         foreach (var comp in componentes)
@@ -155,3 +155,4 @@ public class LobbyAnimationSetupTool : EditorWindow
     }
 }
 #endif
+

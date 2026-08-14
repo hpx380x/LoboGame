@@ -18,7 +18,7 @@ public class CanvasDiagnostic
 
         Debug.Log("==== [DIAGNÓSTICO DE BOTONES] Empezando ====");
 
-        Button[] buttons = Object.FindObjectsByType<Button>(FindObjectsSortMode.None);
+        Button[] buttons = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude);
         foreach (Button b in buttons)
         {
             Debug.Log($"Botón: {b.gameObject.name} | Está en el Canvas: {(b.GetComponentInParent<Canvas>() != null ? b.GetComponentInParent<Canvas>().name : "NULO")}");
@@ -50,3 +50,4 @@ public class CanvasDiagnostic
         UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
     }
 }
+

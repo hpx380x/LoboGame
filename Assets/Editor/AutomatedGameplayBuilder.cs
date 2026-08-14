@@ -53,7 +53,7 @@ public class AutomatedGameplayBuilder
             changed = true;
         }
 
-        if (Object.FindFirstObjectByType<Light>() == null)
+        if (Object.FindAnyObjectByType<Light>() == null)
         {
             GameObject lightObj = new GameObject("Directional Light");
             Light l = lightObj.AddComponent<Light>();
@@ -76,7 +76,7 @@ public class AutomatedGameplayBuilder
             if(followCamPrefab) { PrefabUtility.InstantiatePrefab(followCamPrefab); changed = true; }
         }
 
-        if (Object.FindFirstObjectByType<SpawnManager>() == null)
+        if (Object.FindAnyObjectByType<SpawnManager>() == null)
         {
             GameObject smObj = new GameObject("SpawnManager");
             smObj.AddComponent<NetworkObject>();
@@ -112,3 +112,4 @@ public class AutomatedGameplayBuilder
         Debug.Log("<color=green>[AutomatedGameplayBuilder] ¡Tu mapa Scene_Gameplay ha sido construido mágicamente! (Suelo, luz, cámaras y SpawnManager listos). Y he devuelto tu Unity a la escena Scene_Menu de forma segura.</color>");
     }
 }
+

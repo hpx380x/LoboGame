@@ -21,7 +21,7 @@ public class AutomatedGameManagerModifier
         bool sceneDirty = false;
 
         // 1. Instalar el GameManager en la Escena
-        GameManager gm = Object.FindFirstObjectByType<GameManager>();
+        GameManager gm = Object.FindAnyObjectByType<GameManager>();
         if (gm == null)
         {
             GameObject gmObj = new GameObject("GameManager");
@@ -32,7 +32,7 @@ public class AutomatedGameManagerModifier
         }
 
         // 2. Instalar el Botón en un Canvas Existente
-        Canvas canvas = Object.FindFirstObjectByType<Canvas>();
+        Canvas canvas = Object.FindAnyObjectByType<Canvas>();
         if (canvas != null)
         {
             // Creamos un botón "Start Game" en la parte baja de la pantalla
@@ -80,3 +80,4 @@ public class AutomatedGameManagerModifier
         System.IO.File.WriteAllText(markerPath, "Completado");
     }
 }
+

@@ -15,7 +15,7 @@ public class AutomatedFinalFixes
         string marker = "Assets/Editor/AutomatedFinalFixesRun.txt";
         if (System.IO.File.Exists(marker)) return;
 
-        NetworkManager netManager = Object.FindFirstObjectByType<NetworkManager>();
+        NetworkManager netManager = Object.FindAnyObjectByType<NetworkManager>();
         if (netManager != null)
         {
             // Forzar el auto-spawn a NULO limpiando el objeto seriado para que Unity guarde sí o sí a nivel inspector
@@ -39,3 +39,4 @@ public class AutomatedFinalFixes
         UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
     }
 }
+

@@ -23,7 +23,7 @@ public class AutomatedSceneModifier
         }
 
         // Revisamos si ya existe uno en la escena
-        SpawnManager existingManager = Object.FindFirstObjectByType<SpawnManager>();
+        SpawnManager existingManager = Object.FindAnyObjectByType<SpawnManager>();
         if (existingManager != null)
         {
             Debug.Log("[AutomatedSceneModifier] Ya existe un SpawnManager en la escena, saltando creación.");
@@ -84,3 +84,4 @@ public class AutomatedSceneModifier
         Debug.Log("[AutomatedSceneModifier] ¡SpawnManager creado y guardado en la escena con éxito!");
     }
 }
+

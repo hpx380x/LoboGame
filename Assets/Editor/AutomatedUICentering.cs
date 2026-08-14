@@ -18,7 +18,7 @@ public class AutomatedUICentering
         bool changed = false;
 
         // Buscamos todos los Canvas y forzamos que se escalen correctamente con la pantalla
-        Canvas[] canvases = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None);
+        Canvas[] canvases = Object.FindObjectsByType<Canvas>(FindObjectsInactive.Exclude);
         foreach (Canvas c in canvases)
         {
             CanvasScaler scaler = c.GetComponent<CanvasScaler>();
@@ -32,7 +32,7 @@ public class AutomatedUICentering
         }
 
         // Centrar botón Host
-        Button[] buttons = Object.FindObjectsByType<Button>(FindObjectsSortMode.None);
+        Button[] buttons = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude);
         foreach (Button b in buttons)
         {
             RectTransform rt = b.GetComponent<RectTransform>();
@@ -75,3 +75,4 @@ public class AutomatedUICentering
         System.IO.File.WriteAllText(marker, "Done");
     }
 }
+
