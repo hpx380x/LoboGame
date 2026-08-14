@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: SombreroTonto
+  m_EditorClassIdentifier: Assembly-CSharp::Core.QuestSystem.QuestData
+  questID: mision_sombrero_tonto
+  nombreMision: Mision_Sombrero Tonto
+  descripcionMision: "Crea un sombrero de buf\xF3n que confunde al lobo."
+  pasos:
+  - materialRequerido: 15
+    zonaRequerida: 2
+    descripcion: Busca la Escoba en la Casa de la Bruja.
+  - materialRequerido: 2
+    zonaRequerida: 4
+    descripcion: "Consigue Madera de Coraz\xF3n en el Aserradero."
+  objetoRecompensa: {fileID: 11400000, guid: 2b3affcfc3e053547aa72f47112b59bc, type: 2}
+  oroRecompensa: 15

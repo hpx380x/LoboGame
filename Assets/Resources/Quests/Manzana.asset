@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: Manzana
+  m_EditorClassIdentifier: Assembly-CSharp::QuestData
+  questID: mision_manzana_oro
+  nombreMision: Mision_ManzanaDorada
+  descripcionMision: Forja la legendaria Manzana Dorada.
+  pasos:
+  - materialRequerido: 12
+    zonaRequerida: 2
+    descripcion: "Consigue una Manzana en el Huerto de la Casa de la Bruja."
+  - materialRequerido: 6
+    zonaRequerida: 3
+    descripcion: "Bendice la manzana con Esencia Antigua en el Altar."
+  objetoRecompensa: {fileID: 11400000, guid: 1dccb0b1c7d75744d8bf1dfd92b17218, type: 2}
+  oroRecompensa: 10

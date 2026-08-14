@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: minar
+  m_EditorClassIdentifier: Assembly-CSharp::QuestData
+  questID: mision_Picar
+  nombreMision: Mision_Minar
+  descripcionMision: Mina en la cueva
+  pasos:
+  - materialRequerido: 0
+    zonaRequerida: 5
+    descripcion: Mina en la cueva
+    animationInteractionType: 5
+    interactionDuration: 2
+  - materialRequerido: 0
+    zonaRequerida: 11
+    descripcion: Entrega el mineral al Herrero
+    animationInteractionType: 12
+    interactionDuration: 2
+  objetoRecompensa: {fileID: 0}
+  oroRecompensa: 10
+  esMisionBasica: 1
+  animationInteractionType: 0
+  toolVisualName: 
+  interactionDuration: 0

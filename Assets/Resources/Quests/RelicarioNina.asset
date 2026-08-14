@@ -1,0 +1,29 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: RelicarioNina
+  m_EditorClassIdentifier: Assembly-CSharp::Core.QuestSystem.QuestData
+  questID: mision_relicario_nina
+  nombreMision: "Mision_Relicario de Ni\xF1a"
+  descripcionMision: Bendice un relicario antiguo con luz sagrada.
+  pasos:
+  - materialRequerido: 13
+    zonaRequerida: 1
+    descripcion: "Busca la L\xE1pida en el Cementerio."
+  - materialRequerido: 6
+    zonaRequerida: 3
+    descripcion: Consigue Esencia Antigua en el Altar.
+  - materialRequerido: 14
+    zonaRequerida: 6
+    descripcion: "Obt\xE9n una Vela en la Torre para iluminarlo."
+  objetoRecompensa: {fileID: 11400000, guid: 5bac0af432d1aff4b8d2f05e10081576, type: 2}
+  oroRecompensa: 25

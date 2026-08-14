@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: Huerto
+  m_EditorClassIdentifier: Assembly-CSharp::QuestData
+  questID: mision_huerto
+  nombreMision: Mision_Huerto
+  descripcionMision: Riega el huerto de la bruja
+  pasos:
+  - materialRequerido: 17
+    zonaRequerida: 9
+    descripcion: Recoge agua del pozo
+    animationInteractionType: 3
+    interactionDuration: 3
+  - materialRequerido: 17
+    zonaRequerida: 2
+    descripcion: Riega el huerto de la bruja
+    animationInteractionType: 8
+    interactionDuration: 3
+  objetoRecompensa: {fileID: 0}
+  oroRecompensa: 10
+  esMisionBasica: 1
+  animationInteractionType: 1
+  toolVisualName: 
+  interactionDuration: 3

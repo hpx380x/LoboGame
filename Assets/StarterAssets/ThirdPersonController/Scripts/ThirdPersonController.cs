@@ -1,4 +1,4 @@
-﻿ using UnityEngine;
+ using UnityEngine;
 #if ENABLE_INPUT_SYSTEM 
 using UnityEngine.InputSystem;
 #endif
@@ -136,15 +136,24 @@ namespace StarterAssets
         {
             if (_mainCamera == null)
             {
-                _mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
+                _mainCamera = GameObject.FindWithTag("MainCamera");
             }
         }
+
+        private Quests.PlayerTransformation _transformation;
 
         private void Start()
         {
             _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
             
-            _hasAnimator = TryGetComponent(out _animator);
+            _transformation = GetComponent<Quests.PlayerTransformation>();
+            if (_transformation != null)
+            {
+                _transformation.OnAnimatorChanged += HandleAnimatorChanged;
+            }
+
+            UpdateAnimatorReference();
+
             _controller = GetComponent<CharacterController>();
             _input = GetComponent<StarterAssetsInputs>();
 #if ENABLE_INPUT_SYSTEM 
@@ -160,9 +169,55 @@ namespace StarterAssets
             _fallTimeoutDelta = FallTimeout;
         }
 
+        private void OnDestroy()
+        {
+            if (_transformation != null)
+            {
+                _transformation.OnAnimatorChanged -= HandleAnimatorChanged;
+            }
+        }
+
+        private void HandleAnimatorChanged(Animator newAnimator)
+        {
+            _animator = newAnimator;
+            _hasAnimator = _animator != null;
+            Debug.Log($"[ThirdPersonController] Referencia de Animator actualizada dinámicamente a: {(_animator != null ? _animator.gameObject.name : "NULO")}");
+        }
+
+        private void UpdateAnimatorReference()
+        {
+            _animator = null;
+            // 1. Buscar en los hijos activos con controlador asignado
+            foreach (var anim in GetComponentsInChildren<Animator>())
+            {
+                if (anim.gameObject != this.gameObject && anim.isActiveAndEnabled && anim.runtimeAnimatorController != null)
+                {
+                    _animator = anim;
+                    break;
+                }
+            }
+            // 2. Si no hay ninguno en los hijos, usar el de la raíz (si tiene controlador asignado)
+            if (_animator == null)
+            {
+                if (TryGetComponent(out Animator rootAnim) && rootAnim.isActiveAndEnabled && rootAnim.runtimeAnimatorController != null)
+                {
+                    _animator = rootAnim;
+                }
+            }
+            _hasAnimator = _animator != null;
+        }
+
+        public bool CanMove { get; set; } = true;
+
         private void Update()
         {
-            _hasAnimator = TryGetComponent(out _animator);
+            // [NUEVO LOCK GUARD DESACOPLADO]
+            if (!CanMove) 
+            {
+                _input.move = Vector2.zero;
+                _input.jump = false;
+                _input.sprint = false;
+            }
 
             CheckCamera();
 
@@ -210,6 +265,9 @@ namespace StarterAssets
 
                 _cinemachineTargetYaw += _input.look.x * deltaTimeMultiplier;
                 _cinemachineTargetPitch += _input.look.y * deltaTimeMultiplier;
+                
+                // [Log de Cámara] Solo si se está moviendo el ratón
+                Debug.Log($"[Controller] Cámara Yaw: {_cinemachineTargetYaw}, Pitch: {_cinemachineTargetPitch}");
             }
 
             // clamp our rotations so our values are limited 360 degrees
@@ -217,8 +275,15 @@ namespace StarterAssets
             _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, BottomClamp, TopClamp);
 
             // Cinemachine will follow this target
-            CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
-                _cinemachineTargetYaw, 0.0f);
+            if (CinemachineCameraTarget != null)
+            {
+                CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
+                    _cinemachineTargetYaw, 0.0f);
+            }
+            else
+            {
+                Debug.LogWarning("[Controller] ¡CinemachineCameraTarget es NULO en el inspector!");
+            }
         }
 
         private void Move()
@@ -263,7 +328,7 @@ namespace StarterAssets
 
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
             // if there is a move input rotate player when the player is moving
-            if (_input.move != Vector2.zero)
+            if (_input.move != Vector2.zero && _mainCamera != null)
             {
                 _targetRotation = Mathf.Atan2(inputDirection.x, inputDirection.z) * Mathf.Rad2Deg +
                                   _mainCamera.transform.eulerAngles.y;
@@ -278,8 +343,15 @@ namespace StarterAssets
             Vector3 targetDirection = Quaternion.Euler(0.0f, _targetRotation, 0.0f) * Vector3.forward;
 
             // move the player
-            _controller.Move(targetDirection.normalized * (_speed * Time.deltaTime) +
-                             new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime);
+            Vector3 targetMove = targetDirection.normalized * (_speed * Time.deltaTime) +
+                             new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime;
+
+            if (_input.move != Vector2.zero)
+            {
+                Debug.Log($"[ThirdPersonController] Move Input: {_input.move}, Speed: {_speed}, Grounded: {Grounded}");
+            }
+
+            _controller.Move(targetMove);
 
             // update animator if using character
             if (_hasAnimator)
@@ -365,6 +437,23 @@ namespace StarterAssets
             return Mathf.Clamp(lfAngle, lfMin, lfMax);
         }
 
+        // ── Detección de colisiones (CharacterController) ──────────────
+        private void OnControllerColliderHit(ControllerColliderHit hit)
+        {
+            // Ignorar el suelo (normales apuntando hacia arriba)
+            if (hit.normal.y > 0.7f) return;
+
+            // Solo loguear si el personaje está intentando moverse
+            if (_input == null || _input.move.sqrMagnitude < 0.01f) return;
+
+            Debug.Log($"[COLISION] Chocando con: '{hit.gameObject.name}' " +
+                      $"| Tag: {hit.gameObject.tag} " +
+                      $"| Layer: {LayerMask.LayerToName(hit.gameObject.layer)} " +
+                      $"| Normal: {hit.normal:F2} " +
+                      $"| MoveDir: {hit.moveDirection:F2}",
+                      hit.gameObject);
+        }
+
         private void OnDrawGizmosSelected()
         {
             Color transparentGreen = new Color(0.0f, 1.0f, 0.0f, 0.35f);
@@ -379,7 +468,19 @@ namespace StarterAssets
                 GroundedRadius);
         }
 
+
         private void OnFootstep(AnimationEvent animationEvent)
+        {
+            RelayOnFootstep(animationEvent);
+        }
+
+        private void OnLand(AnimationEvent animationEvent)
+        {
+            RelayOnLand(animationEvent);
+        }
+
+        // Métodos públicos para recibir eventos desde AnimationEventRelay (cuando el Animator está en un hijo)
+        public void RelayOnFootstep(AnimationEvent animationEvent)
         {
             if (_controller == null) return;
 
@@ -393,7 +494,7 @@ namespace StarterAssets
             }
         }
 
-        private void OnLand(AnimationEvent animationEvent)
+        public void RelayOnLand(AnimationEvent animationEvent)
         {
             if (_controller == null) return;
 
@@ -403,4 +504,5 @@ namespace StarterAssets
             }
         }
     }
+
 }

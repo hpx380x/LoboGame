@@ -1,0 +1,40 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: repararlapida
+  m_EditorClassIdentifier: Assembly-CSharp::QuestData
+  questID: mision_Reparar
+  nombreMision: La Cripta del Tiempo
+  descripcionMision: "Examina la lápida, recoge la esencia antigua y deposítala a tiempo en la tumba."
+  pasos:
+  - materialRequerido: 0
+    zonaRequerida: 1
+    descripcion: Mira en la Lapida
+    animationInteractionType: 0
+    interactionDuration: 5
+  - materialRequerido: 6
+    zonaRequerida: 1
+    descripcion: Recoge esencia Antigua en la estatua
+    animationInteractionType: 0
+    interactionDuration: 5
+  - materialRequerido: 6
+    zonaRequerida: 1
+    descripcion: Depositar en la Lapida
+    animationInteractionType: 0
+    interactionDuration: 5
+  objetoRecompensa: {fileID: 0}
+  oroRecompensa: 10
+  esMisionBasica: 1
+  animationInteractionType: 0
+  toolVisualName: 
+  interactionDuration: 5
+

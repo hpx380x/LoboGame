@@ -1,0 +1,29 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbf9dd54ded4f754a92cd1748e5ddb1b, type: 3}
+  m_Name: Cupido
+  m_EditorClassIdentifier: Assembly-CSharp::Core.QuestSystem.QuestData
+  questID: mision_arco_cupido
+  nombreMision: "Mision_El arco de cupido"
+  descripcionMision: "Crea el Arco de Cupido para enlazar dos corazones."
+  pasos:
+  - materialRequerido: 1
+    zonaRequerida: 6
+    descripcion: Busca Acero de Sierra en la Torre.
+  - materialRequerido: 2
+    zonaRequerida: 4
+    descripcion: Consigue Madera de Corazón en el Aserradero.
+  - materialRequerido: 6
+    zonaRequerida: 3
+    descripcion: Obtén la Esencia Antigua en el Altar para encantar el arco.
+  objetoRecompensa: {fileID: 11400000, guid: de3942caf46e8ae439ce3dd4954efa59, type: 2}
+  oroRecompensa: 20
